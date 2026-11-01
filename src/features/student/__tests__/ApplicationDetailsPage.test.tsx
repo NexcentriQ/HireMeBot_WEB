@@ -1,46 +1,90 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from '@/app/ThemeProvider'
 import { AuthProvider } from '@/features/auth/AuthProvider'
 import { ApplicationDetailsPage } from '../pages/ApplicationDetailsPage'
+import { studentDashboardKey } from '../hooks/useStudentDashboard'
+import { MOCK_DASHBOARD } from '../data/mockApplications'
+import { studentService } from '../data/studentService'
 
-function renderAt(path: string) {
-  return render(
-    <ThemeProvider>
-      <AuthProvider>
-        <MemoryRouter initialEntries={[path]}>
-          <Routes>
-            <Route path="/student/applications/:applicationId" element={<ApplicationDetailsPage />} />
-          </Routes>
-        </MemoryRouter>
-      </AuthProvider>
-    </ThemeProvider>
-  )
+function renderAt(path: string, opts: { seedCache?: boolean; client?: QueryClient } = {}) {
+  const client =
+    opts.client ?? new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  if (opts.seedCache) {
+    client.setQueryData(studentDashboardKey(), MOCK_DASHBOARD)
+  }
+  return {
+    client,
+    ...render(
+      <ThemeProvider>
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={[path]}>
+            <AuthProvider>
+              <Routes>
+                <Route
+                  path="/student/applications/:applicationId"
+                  element={<ApplicationDetailsPage />}
+                />
+                <Route path="/student/applications" element={<div>list-page</div>} />
+              </Routes>
+            </AuthProvider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </ThemeProvider>
+    )
+  }
 }
 
 describe('ApplicationDetailsPage', () => {
-  it('shows backend-aligned job details for a known application', async () => {
-    renderAt('/student/applications/1000000025')
-    expect(await screen.findByRole('heading', { name: 'Amazon' })).toBeInTheDocument()
-    // Several values intentionally appear in both the hero and the Job Details
-    // table (Company / Role / Location). Assert they render at all.
-    expect(screen.getAllByText('Software Development Engineer').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Seattle, WA, USA').length).toBeGreaterThan(0)
-    expect(screen.getByText('Amazon Careers')).toBeInTheDocument()
-    expect(screen.getByText('#1000000025')).toBeInTheDocument()
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
-  it('renders a "View Job Posting" link that opens the backend jobLink in a new tab', async () => {
-    renderAt('/student/applications/1000000025')
+  it('reads from the dashboard cache without triggering a service call', async () => {
+    const spy = vi.spyOn(studentService, 'getDashboard')
+    renderAt('/student/applications/1000000125', { seedCache: true })
+    expect(await screen.findByRole('heading', { name: 'Amazon' })).toBeInTheDocument()
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('fetches the dashboard once on direct nav and renders the matching application', async () => {
+    const spy = vi.spyOn(studentService, 'getDashboard')
+    renderAt('/student/applications/1000000125')
+    expect(await screen.findByRole('heading', { name: 'Amazon' })).toBeInTheDocument()
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows "Application details are unavailable." when the id is not in the response', async () => {
+    renderAt('/student/applications/999999999', { seedCache: true })
+    expect(
+      await screen.findByText(/application details are unavailable\./i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /return to today's applications/i })
+    ).toBeInTheDocument()
+  })
+
+  it('shows the "unavailable" state for a non-numeric id without hitting the service', async () => {
+    const spy = vi.spyOn(studentService, 'getDashboard')
+    renderAt('/student/applications/not-a-number', { seedCache: true })
+    expect(
+      await screen.findByText(/application details are unavailable\./i)
+    ).toBeInTheDocument()
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('renders a View Job Posting link that opens the backend jobLink in a new tab', async () => {
+    renderAt('/student/applications/1000000125', { seedCache: true })
     const link = await screen.findByRole('link', { name: /view job posting at Amazon/i })
     expect(link).toHaveAttribute('href', 'https://www.amazon.jobs/en/jobs/1234567')
     expect(link).toHaveAttribute('target', '_blank')
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
   })
 
-  it('renders resume and cover letter document links to the S3 URLs', async () => {
-    renderAt('/student/applications/1000000025')
+  it('renders resume and cover letter S3 document links', async () => {
+    renderAt('/student/applications/1000000125', { seedCache: true })
     const resume = await screen.findByRole('link', { name: /view Resume/i })
     expect(resume).toHaveAttribute('href', expect.stringMatching(/sample-resume\.pdf$/))
     const cover = screen.getByRole('link', { name: /view Cover Letter/i })
@@ -48,26 +92,9 @@ describe('ApplicationDetailsPage', () => {
   })
 
   it('offers a Download action for a DOCX cover letter', async () => {
-    renderAt('/student/applications/1000000024') // Microsoft entry uses .docx
+    renderAt('/student/applications/1000000124', { seedCache: true }) // Microsoft entry has DOCX
     const cover = await screen.findByRole('link', { name: /download Cover Letter/i })
     expect(cover).toHaveAttribute('href', expect.stringMatching(/\.docx$/))
     expect(cover).toHaveAttribute('download')
-  })
-
-  it('renders a not-found state for an unknown id', async () => {
-    renderAt('/student/applications/999999999')
-    expect(await screen.findByText(/application not found/i)).toBeInTheDocument()
-  })
-
-  it('renders a not-found state for a non-numeric id', async () => {
-    renderAt('/student/applications/not-a-number')
-    expect(await screen.findByText(/application not found/i)).toBeInTheDocument()
-  })
-
-  it('does not render application-status UI (deferred to a future release)', async () => {
-    renderAt('/student/applications/1000000025')
-    await screen.findByRole('heading', { name: 'Amazon' })
-    expect(screen.queryByText(/application submitted/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/interview scheduled/i)).not.toBeInTheDocument()
   })
 })

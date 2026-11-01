@@ -13,7 +13,14 @@ function greetingFor(now: Date): string {
   return 'Good evening'
 }
 
-export function DashboardHeader({ user, now = new Date() }: { user: AuthenticatedUser; now?: Date }) {
+type DashboardHeaderProps = {
+  user: AuthenticatedUser
+  now?: Date
+  /** Optional trailing slot (e.g. a Refresh button) rendered before the bell. */
+  trailing?: React.ReactNode
+}
+
+export function DashboardHeader({ user, now = new Date(), trailing }: DashboardHeaderProps) {
   return (
     <header className="sticky top-0 z-20 bg-background/90 backdrop-blur border-b border-border safe-top">
       <div className="mx-auto max-w-md flex items-center justify-between gap-3 px-4 py-3">
@@ -24,6 +31,7 @@ export function DashboardHeader({ user, now = new Date() }: { user: Authenticate
           <h1 className="text-xl font-extrabold leading-tight">Dashboard</h1>
         </div>
         <div className="flex items-center gap-2">
+          {trailing}
           <Link
             to="/student/notifications"
             aria-label="Notifications"

@@ -1,16 +1,19 @@
 import { Link } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 import { CompanyLogo } from './CompanyLogo'
+import { formatAppliedShort } from '../lib/formatDate'
 import type { Application } from '../data/types'
 import { cn } from '@/lib/utils'
 
-export function ApplicationCard({ application, className }: { application: Application; className?: string }) {
-  const applied = new Date(application.appliedAt)
-  const applyLabel = applied.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric'
-  })
+type ApplicationCardProps = {
+  application: Application
+  /** IANA zone from the server; renders dates in the reporting zone when supplied. */
+  timeZone?: string
+  className?: string
+}
+
+export function ApplicationCard({ application, timeZone, className }: ApplicationCardProps) {
+  const applyLabel = formatAppliedShort(application.appliedAt, { timeZone })
   return (
     <Link
       to={`/student/applications/${application.applicationId}`}

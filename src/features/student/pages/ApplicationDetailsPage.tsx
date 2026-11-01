@@ -1,28 +1,15 @@
-import { Link, useParams } from 'react-router-dom'
-import { ExternalLink, FileText, MapPin } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { AlertTriangle, ExternalLink, FileText, Loader2, MapPin } from 'lucide-react'
 import { PageHeader } from '../components/PageHeader'
 import { CompanyLogo } from '../components/CompanyLogo'
 import { EmptyState } from '../components/EmptyState'
 import { Button } from '@/components/ui/button'
-import { MOCK_APPLICATIONS } from '../data/mockApplications'
+import { useStudentDashboard } from '../hooks/useStudentDashboard'
+import { formatAppliedLong } from '../lib/formatDate'
+import type { Application } from '../data/types'
+import type { DashboardResponse } from '../data/apiTypes'
 import { cn } from '@/lib/utils'
 
-function formatAppliedDate(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  })
-}
-
-/**
- * Pull a file extension (lowercased, no dot) out of a URL. Accepts both
- * absolute URLs (`https://…/file.pdf`) and site-relative URLs (`/samples/x.pdf`)
- * by resolving against the current origin when available.
- */
 function fileExtensionFor(url: string): 'pdf' | 'docx' | 'file' {
   try {
     const base = typeof window !== 'undefined' ? window.location.origin : 'http://local'
@@ -41,39 +28,48 @@ const EXT_LABEL: Record<'pdf' | 'docx' | 'file', string> = {
   file: 'Document'
 }
 
-/**
- * V1 Application Details view. Fields are 1:1 with the backend
- * `GET /api/v1/student/applications` response (API.md): company, title,
- * location, source, applied-at, and the external job link. Resume and cover
- * letter URLs are also surfaced — the backend will begin returning them in a
- * follow-up change (sample S3 URLs are used in the mock meanwhile).
- *
- * Application-status tracking (In Review / Interview / Offer / Rejected /
- * timeline) is intentionally deferred to a future release.
- */
+function findApplication(
+  dashboard: DashboardResponse | undefined,
+  applicationId: number
+): Application | undefined {
+  if (!dashboard) return undefined
+  for (const key of Object.keys(dashboard.pages)) {
+    const page = dashboard.pages[key]
+    if (!page) continue
+    const hit = page.find((a) => a.applicationId === applicationId)
+    if (hit) return hit
+  }
+  return undefined
+}
+
 export function ApplicationDetailsPage() {
+  const navigate = useNavigate()
   const { applicationId: idParam } = useParams<{ applicationId: string }>()
   const asNumber = idParam ? Number(idParam) : NaN
-  const application =
-    Number.isFinite(asNumber) && Number.isInteger(asNumber)
-      ? MOCK_APPLICATIONS.find((a) => a.applicationId === asNumber)
-      : undefined
+  const isValidId = Number.isFinite(asNumber) && Number.isInteger(asNumber)
+
+  // One shared cache entry powers all three student pages. If this is a
+  // hard refresh, this call triggers the single fetch per the spec.
+  const { data: dashboard, isLoading, isError, error, refetch } = useStudentDashboard()
+  const application = isValidId ? findApplication(dashboard, asNumber) : undefined
+
+  // Invalid URL id → not-available immediately, don't wait on the fetch.
+  if (!isValidId) return <Unavailable idParam={idParam} navigate={navigate} />
+
+  // Still fetching the one dashboard call.
+  if (isLoading) return <DetailsSkeleton />
+
+  // Fetch errored (and nothing in cache). Live mode must never substitute
+  // mock data; show error + Retry.
+  if (isError && !application) {
+    return <ErrorView message={extractMessage(error)} onRetry={() => refetch()} />
+  }
 
   if (!application) {
-    return (
-      <div className="flex flex-col">
-        <PageHeader title="Application" showBack />
-        <EmptyState
-          title="Application not found"
-          description="We couldn’t find this application. It may have been removed or the link is invalid."
-        >
-          <Button asChild>
-            <Link to="/student/applications">Back to Applications</Link>
-          </Button>
-        </EmptyState>
-      </div>
-    )
+    return <Unavailable idParam={idParam} navigate={navigate} />
   }
+
+  const timeZone = dashboard?.statistics.timezone
 
   return (
     <div className="flex flex-col">
@@ -89,12 +85,7 @@ export function ApplicationDetailsPage() {
           </p>
         </section>
 
-        {/* Primary external action — open the recruiter-recorded job posting. */}
-        <Button
-          asChild
-          size="lg"
-          className="w-full"
-        >
+        <Button asChild size="lg" className="w-full">
           <a
             href={application.jobLink}
             target="_blank"
@@ -106,7 +97,6 @@ export function ApplicationDetailsPage() {
           </a>
         </Button>
 
-        {/* Job Details — strictly the backend-returned fields. */}
         <section
           aria-labelledby="job-details-heading"
           className="rounded-2xl border border-border bg-card px-4 py-4"
@@ -128,14 +118,15 @@ export function ApplicationDetailsPage() {
             <dd className="font-medium">{application.jobSource}</dd>
 
             <dt className="text-muted-foreground">Applied On</dt>
-            <dd className="font-medium">{formatAppliedDate(application.appliedAt)}</dd>
+            <dd className="font-medium">
+              {formatAppliedLong(application.appliedAt, { timeZone })}
+            </dd>
 
             <dt className="text-muted-foreground">Reference</dt>
             <dd className="font-mono text-xs">#{application.applicationId}</dd>
           </dl>
         </section>
 
-        {/* Documents — resume / cover letter S3 links. */}
         {(application.resumeUrl || application.coverLetterUrl) && (
           <section
             aria-labelledby="documents-heading"
@@ -159,21 +150,10 @@ export function ApplicationDetailsPage() {
   )
 }
 
-type DocumentRowProps = {
-  url: string
-  label: string
-}
-
-/**
- * Renders a single resume/cover-letter row. The link opens the S3 URL in the
- * user's default browser (new tab); the browser decides whether to render the
- * PDF/DOCX inline or download it, based on the S3 object's Content-Disposition.
- * Falls back gracefully for unknown file types.
- */
-function DocumentRow({ url, label }: DocumentRowProps) {
+function DocumentRow({ url, label }: { url: string; label: string }) {
   const ext = fileExtensionFor(url)
   const extLabel = EXT_LABEL[ext]
-  const isDownloadOnly = ext === 'docx' // most browsers don't render DOCX inline
+  const isDownloadOnly = ext === 'docx'
   const actionLabel = isDownloadOnly ? 'Download' : 'View'
 
   return (
@@ -203,4 +183,87 @@ function DocumentRow({ url, label }: DocumentRowProps) {
       </a>
     </li>
   )
+}
+
+function DetailsSkeleton() {
+  return (
+    <div className="flex flex-col">
+      <PageHeader title="" showBack />
+      <div className="mx-auto w-full max-w-md px-4 pb-6 flex flex-col gap-4">
+        <div className="h-16 w-16 rounded-2xl bg-muted/40 animate-pulse self-center" />
+        <div className="h-5 w-40 bg-muted/40 animate-pulse rounded self-center" />
+        <div className="h-10 w-full bg-muted/40 animate-pulse rounded-xl" />
+        <div className="h-40 w-full bg-muted/40 animate-pulse rounded-2xl" />
+        <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+          Loading application…
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Unavailable({
+  idParam,
+  navigate
+}: {
+  idParam: string | undefined
+  navigate: ReturnType<typeof useNavigate>
+}) {
+  return (
+    <div className="flex flex-col">
+      <PageHeader title="Application" showBack />
+      <EmptyState
+        title="Application details are unavailable."
+        description={
+          idParam
+            ? `We could not find application #${idParam} in your current data. It may belong to a previous day or no longer exist.`
+            : 'The requested application could not be found.'
+        }
+      >
+        <Button onClick={() => navigate('/student/applications')}>
+          Return to Today's Applications
+        </Button>
+      </EmptyState>
+    </div>
+  )
+}
+
+function ErrorView({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col">
+      <PageHeader title="Application" showBack />
+      <div className="mx-auto w-full max-w-md px-4 py-6">
+        <div
+          role="alert"
+          className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 flex flex-col gap-3"
+        >
+          <div className="flex items-start gap-3">
+            <div className="h-10 w-10 rounded-xl bg-destructive/15 text-destructive flex items-center justify-center shrink-0">
+              <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold">Could not load this application</div>
+              <div className="text-xs text-muted-foreground mt-1 break-words">{message}</div>
+            </div>
+          </div>
+          <div className="flex gap-2 self-end">
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/student/applications">Back</Link>
+            </Button>
+            <Button size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function extractMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as Error).message === 'string') {
+    return (err as Error).message
+  }
+  return 'Unexpected error while contacting the HireMeBot API.'
 }

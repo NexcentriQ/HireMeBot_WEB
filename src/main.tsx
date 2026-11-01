@@ -12,7 +12,12 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1
+      retry: 1,
+      // Dashboard spec: hold cached responses for ~1 hour; retain in gc for 2
+      // hours so re-mounts don't re-fetch unnecessarily. Individual queries
+      // can override.
+      staleTime: 60 * 60 * 1000,
+      gcTime: 2 * 60 * 60 * 1000
     }
   }
 })

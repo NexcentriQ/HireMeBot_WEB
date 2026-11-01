@@ -4,6 +4,7 @@ type DayDatum = { day: string; submitted: number }
 
 type WeeklyActivityChartProps = {
   data: DayDatum[]
+  /** Target line value (per weekday). Prefer the server-provided value when available. */
   target?: number
   maxBar?: number
 }

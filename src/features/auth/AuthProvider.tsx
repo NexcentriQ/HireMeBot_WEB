@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { mockAuthService } from './services/MockAuthService'
 import type { AuthService, AuthenticatedUser } from './types'
 
@@ -22,6 +23,7 @@ const authService: AuthService = mockAuthService
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<AuthenticatedUser | null>(null)
   const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
 
   const setUser = useCallback((next: AuthenticatedUser | null) => {
     setUserState(next)
@@ -35,7 +37,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     await authService.logout()
     setUserState(null)
-  }, [])
+    // Drop every student-dashboard query so the next sign-in cannot read a
+    // prior student's cached response.
+    queryClient.removeQueries({ queryKey: ['student-dashboard'] })
+  }, [queryClient])
 
   useEffect(() => {
     let cancelled = false

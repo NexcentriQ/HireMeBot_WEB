@@ -1,29 +1,60 @@
-import { MOCK_APPLICATIONS, MOCK_DASHBOARD_SUMMARY } from './mockApplications'
-import type { Application, DashboardSummary } from './types'
+import { env, type StudentApiMode } from '@/lib/env'
+import type { DashboardResponse } from './apiTypes'
+import { studentHttpGet } from './http'
+import { MOCK_DASHBOARD } from './mockApplications'
 
 /**
- * Dev-only in-process service that returns the sample dashboard & application
- * data. Swap this module for a real API client once the backend ships.
+ * Student-facing API facade. Two implementations are selected on demand
+ * based on `VITE_STUDENT_API_MODE`:
  *
- * Note on `getApplicationById`: the backend has no "get application by id"
- * endpoint today — the only student-facing read is the day's list. The real
- * implementation will likely need either a new endpoint or a cache keyed by
- * the day the user came from.
+ *   mock → in-process MockStudentService (sample data; no network)
+ *   live → LiveStudentService that calls GET /api/v1/student/applications
+ *
+ * The frontend never silently falls back from live to mock on error — if a
+ * live request fails, the UI surfaces the error with a retry affordance.
+ *
+ * Implementation detail: the picker is lazy and re-evaluates on every call
+ * so tests can switch modes with `vi.stubEnv` without reloading modules.
  */
-export const studentService = {
-  async getStudentDashboardSummary(): Promise<DashboardSummary> {
-    return MOCK_DASHBOARD_SUMMARY
-  },
-  async getStudentApplications(): Promise<Application[]> {
-    return [...MOCK_APPLICATIONS].sort((a, b) => (a.appliedAt < b.appliedAt ? 1 : -1))
-  },
-  async getRecentApplications(limit = 5): Promise<Application[]> {
-    const sorted = [...MOCK_APPLICATIONS].sort((a, b) => (a.appliedAt < b.appliedAt ? 1 : -1))
-    return sorted.slice(0, limit)
-  },
-  async getApplicationById(applicationId: number): Promise<Application | null> {
-    return MOCK_APPLICATIONS.find((a) => a.applicationId === applicationId) ?? null
+export interface StudentService {
+  getDashboard(opts?: { signal?: AbortSignal }): Promise<DashboardResponse>
+}
+
+export class MockStudentService implements StudentService {
+  async getDashboard(): Promise<DashboardResponse> {
+    // Return a defensive clone so a caller mutating the result cannot
+    // corrupt the shared mock. Modest cost; the dataset is tiny.
+    return structuredClone(MOCK_DASHBOARD)
   }
+}
+
+export class LiveStudentService implements StudentService {
+  async getDashboard(opts: { signal?: AbortSignal } = {}): Promise<DashboardResponse> {
+    // No query params — the backend always reports the current date and
+    // returns every page inline.
+    return studentHttpGet<DashboardResponse>('/api/v1/student/applications', opts)
+  }
+}
+
+let cachedImpl: StudentService | undefined
+let cachedMode: StudentApiMode | undefined
+
+function pickImpl(): StudentService {
+  const mode = env().STUDENT_API_MODE
+  if (!cachedImpl || cachedMode !== mode) {
+    cachedImpl = mode === 'live' ? new LiveStudentService() : new MockStudentService()
+    cachedMode = mode
+  }
+  return cachedImpl
+}
+
+/**
+ * Public facade. Delegates to whichever implementation matches the current
+ * env mode. The delegation layer is intentionally thin so `vi.spyOn` on
+ * `studentService.getDashboard` still works in tests.
+ */
+export const studentService: StudentService = {
+  getDashboard: (opts) => pickImpl().getDashboard(opts)
 }
 
 /**

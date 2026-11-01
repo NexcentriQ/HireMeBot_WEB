@@ -1,8 +1,10 @@
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest'
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StudentDashboardPage } from '../pages/StudentDashboardPage'
 import { renderWithProviders } from '@/test/renderWithProviders'
+import { MOCK_DASHBOARD } from '../data/mockApplications'
+import { studentService } from '../data/studentService'
 
 function seedUser() {
   window.localStorage.setItem(
@@ -23,54 +25,57 @@ describe('StudentDashboardPage', () => {
   beforeEach(() => {
     seedUser()
   })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
 
-  it('shows October 2026 with 22 weekdays and a 1,100 monthly target', async () => {
+  it('renders monthly stats from the backend response', async () => {
     renderWithProviders(<StudentDashboardPage />)
+    // Monthly: 820 / 1,100 — 75%
     expect(await screen.findByText('October 2026')).toBeInTheDocument()
-    expect(screen.getByText('22 weekdays · 50 per day')).toBeInTheDocument()
-    expect(screen.getByText(/1,100/)).toBeInTheDocument()
+    expect(screen.getByText('820')).toBeInTheDocument()
+    expect(screen.getByText(/\/ 1,100/)).toBeInTheDocument()
+    expect(screen.getByText('75%')).toBeInTheDocument()
+    expect(screen.getByText('280 remaining')).toBeInTheDocument()
   })
 
-  it('clicking the In Review preview card opens the coming-soon dialog', async () => {
-    const user = userEvent.setup()
+  it('renders today’s stats from the backend response', async () => {
     renderWithProviders(<StudentDashboardPage />)
-    const button = await screen.findByRole('button', { name: /In Review/i })
-    await user.click(button)
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/application review tracking/i)).toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: /got it/i }))
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    const today = MOCK_DASHBOARD.statistics.todayProgress
+    // Anchor on the progressbar aria-label specific to today's card.
+    const bar = await screen.findByRole('progressbar', { name: /today’s progress/i })
+    expect(bar).toHaveAttribute('aria-valuenow', String(Math.min(100, today.percentage)))
+    expect(screen.getByText(new RegExp(`^/ ${today.target}$`))).toBeInTheDocument()
   })
 
-  it('clicking Interviews opens the interview-specific dialog', async () => {
-    const user = userEvent.setup()
-    renderWithProviders(<StudentDashboardPage />)
-    await user.click(await screen.findByRole('button', { name: /Interviews/i }))
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/interview tracking/i)).toBeInTheDocument()
-  })
-
-  it('clicking Offers opens the offers-specific dialog', async () => {
-    const user = userEvent.setup()
-    renderWithProviders(<StudentDashboardPage />)
-    await user.click(await screen.findByRole('button', { name: /Offers/i }))
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/offer tracking/i)).toBeInTheDocument()
-  })
-
-  it('clicking Rejected opens the rejected-specific dialog', async () => {
-    const user = userEvent.setup()
-    renderWithProviders(<StudentDashboardPage />)
-    await user.click(await screen.findByRole('button', { name: /Rejected/i }))
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/rejection insights/i)).toBeInTheDocument()
-  })
-
-  it('shows a weekly activity chart with the five weekday labels', async () => {
+  it('renders a weekly chart with exactly five backend-labeled weekdays', async () => {
     renderWithProviders(<StudentDashboardPage />)
     const chart = await screen.findByRole('img', { name: /weekly application activity/i })
     for (const day of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']) {
       expect(within(chart).getByText(day)).toBeInTheDocument()
     }
+  })
+
+  it('preview tiles show sample numbers + a Coming Soon pill and open the dialog on click', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<StudentDashboardPage />)
+    // Sample preview numbers are visible for visual rhythm (the backend does
+    // not supply these; the pill advertises the preview nature).
+    const inReview = await screen.findByRole('button', { name: /In Review/i })
+    expect(within(inReview).getByText('126')).toBeInTheDocument()
+    expect(within(inReview).getByText(/coming soon/i)).toBeInTheDocument()
+    await user.click(inReview)
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/application review tracking/i)).toBeInTheDocument()
+  })
+
+  it('shows an error state with a Retry action and no fabricated numbers when the API fails', async () => {
+    vi.spyOn(studentService, 'getDashboard').mockRejectedValue(new Error('Boom'))
+    renderWithProviders(<StudentDashboardPage />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load your dashboard/i)
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    // Must not display the previously-cached mock numbers as if they were real.
+    expect(screen.queryByText('820')).not.toBeInTheDocument()
+    expect(screen.queryByText('126')).not.toBeInTheDocument()
   })
 })

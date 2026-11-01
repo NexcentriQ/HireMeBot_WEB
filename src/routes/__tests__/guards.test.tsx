@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from '@/app/ThemeProvider'
 import { AuthProvider } from '@/features/auth/AuthProvider'
 import { RequirePendingRegistration, RequireStudent } from '../guards'
@@ -16,32 +17,35 @@ function Signup() {
 }
 
 function harness(path: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <ThemeProvider>
-      <AuthProvider>
-        <MemoryRouter initialEntries={[path]}>
-          <Routes>
-            <Route
-              path="/student/dashboard"
-              element={
-                <RequireStudent>
-                  <Protected />
-                </RequireStudent>
-              }
-            />
-            <Route
-              path="/connect-google"
-              element={
-                <RequirePendingRegistration needsPhoneVerified>
-                  <Protected />
-                </RequirePendingRegistration>
-              }
-            />
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
-          </Routes>
-        </MemoryRouter>
-      </AuthProvider>
+      <QueryClientProvider client={client}>
+        <AuthProvider>
+          <MemoryRouter initialEntries={[path]}>
+            <Routes>
+              <Route
+                path="/student/dashboard"
+                element={
+                  <RequireStudent>
+                    <Protected />
+                  </RequireStudent>
+                }
+              />
+              <Route
+                path="/connect-google"
+                element={
+                  <RequirePendingRegistration needsPhoneVerified>
+                    <Protected />
+                  </RequirePendingRegistration>
+                }
+              />
+              <Route path="/login" element={<Login />} />
+              <Route path="/signup" element={<Signup />} />
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>
     </ThemeProvider>
   )
 }

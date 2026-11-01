@@ -4,7 +4,12 @@ import { cn } from '@/lib/utils'
 type StatisticsCardProps = {
   icon: LucideIcon
   iconColor?: string
-  value: number | string
+  /**
+   * The headline number. Pass `undefined` to render the tile without a
+   * number — used by preview tiles whose underlying feature is not yet
+   * supported by the backend (In Review / Interviews / Offers / Rejected).
+   */
+  value?: number | string
   label: string
   sublabel?: string
   /** When true, the card renders a subtle corner dot and advertises "preview" in its accessible name. */
@@ -32,31 +37,35 @@ export function StatisticsCard({
     onClick && 'hover:bg-accent/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
   )
 
+  const hasValue = value !== undefined && value !== null
   const content = (
     <>
-      {isPreview && (
-        <span
-          aria-hidden="true"
-          title="Preview — coming soon"
-          className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-primary/70"
-        />
-      )}
       <Icon
         className="h-5 w-5 shrink-0"
         style={iconColor ? { color: iconColor } : undefined}
         aria-hidden="true"
       />
-      <div className="text-lg font-extrabold leading-none">{value}</div>
+      {hasValue && <div className="text-lg font-extrabold leading-none">{value}</div>}
       <div className="text-[11px] font-semibold leading-tight text-foreground whitespace-nowrap">
         {label}
       </div>
-      {sublabel && (
-        <div className="text-[10px] text-muted-foreground leading-tight">{sublabel}</div>
+      {isPreview ? (
+        <span
+          className="inline-block whitespace-nowrap rounded-full px-2 py-[2px] text-[9px] font-bold leading-none bg-gradient-to-r from-primary to-sky-400 text-primary-foreground shadow-sm ring-1 ring-white/15"
+          aria-hidden="true"
+        >
+          Coming Soon
+        </span>
+      ) : (
+        sublabel && (
+          <div className="text-[10px] text-muted-foreground leading-tight">{sublabel}</div>
+        )
       )}
     </>
   )
 
-  const effectiveAria = ariaLabel ?? `${label}${isPreview ? ' — preview, coming soon' : ''}`
+  const effectiveAria =
+    ariaLabel ?? `${label}${isPreview ? ' — coming soon' : ''}`
 
   if (Element === 'button') {
     return (

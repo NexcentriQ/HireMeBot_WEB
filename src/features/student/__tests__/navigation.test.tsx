@@ -57,7 +57,7 @@ describe('student navigation', () => {
     const nav = await screen.findByRole('navigation', { name: /primary/i })
     const link = within(nav).getByRole('link', { name: 'Applications' })
     await user.click(link)
-    expect(await screen.findByRole('heading', { name: /my applications/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /today's applications/i })).toBeInTheDocument()
   })
 
   it('clicking an application from the list navigates to its details', async () => {

@@ -109,3 +109,17 @@ const MONTH_NAMES = [
 export function monthLabel(year: number, monthIndex: number): string {
   return `${MONTH_NAMES[monthIndex]} ${year}`
 }
+
+/**
+ * Accepts the server's `monthlyProgress.month` string ("YYYY-MM") and
+ * renders it as a human-readable label like "October 2026". Returns the raw
+ * input when it does not parse so a bad server value never shows as blank.
+ */
+export function monthLabelFromIso(ym: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(ym)
+  if (!match) return ym
+  const year = Number(match[1])
+  const monthIndex = Number(match[2]) - 1
+  if (monthIndex < 0 || monthIndex > 11) return ym
+  return monthLabel(year, monthIndex)
+}
