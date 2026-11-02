@@ -10,7 +10,6 @@ import {
   Trophy,
   XCircle
 } from 'lucide-react'
-import { useAuth } from '@/features/auth/AuthProvider'
 import { DashboardHeader } from '../components/DashboardHeader'
 import { TargetProgressCard } from '../components/TargetProgressCard'
 import { StatisticsCard } from '../components/StatisticsCard'
@@ -18,6 +17,7 @@ import { WeeklyActivityChart } from '../components/WeeklyActivityChart'
 import { ComingSoonDialog } from '@/components/common/ComingSoonDialog'
 import { Button } from '@/components/ui/button'
 import { useStudentDashboard } from '../hooks/useStudentDashboard'
+import { useStudentProfile } from '../hooks/useStudentProfile'
 import { monthLabelFromIso } from '../lib/targets'
 import type { DashboardStatistics } from '../data/apiTypes'
 import { cn } from '@/lib/utils'
@@ -47,12 +47,13 @@ const PREVIEW_COPY: Record<Exclude<PreviewKey, null>, { title: string; descripti
 }
 
 export function StudentDashboardPage() {
-  const { user } = useAuth()
   const [preview, setPreview] = useState<PreviewKey>(null)
   const { data, isLoading, isFetching, isError, isRefetchError, error, refetch } =
     useStudentDashboard()
-
-  if (!user) return null
+  // The greeting name comes from `data.student` in the same cached dashboard
+  // response (no extra request). It is null while loading, on error, or if
+  // the profile is malformed — the header then shows a neutral greeting.
+  const { profile } = useStudentProfile()
 
   // Enhancement 2: a background refetch (hourly refetch, Refresh click after
   // success, midnight invalidation) that FAILS while we still have a prior
@@ -63,7 +64,7 @@ export function StudentDashboardPage() {
   return (
     <div className="flex flex-col">
       <DashboardHeader
-        user={user}
+        profile={profile}
         trailing={
           <Button
             size="sm"

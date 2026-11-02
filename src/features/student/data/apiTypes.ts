@@ -46,12 +46,27 @@ export type DashboardStatistics = {
 }
 
 /**
+ * The student's profile as returned inside the dashboard response
+ * (`data.student`). Backend/MySQL is the source of truth in live mode.
+ * Read-only in V1 — no editing and no separate profile endpoint exists.
+ */
+export type StudentProfile = {
+  firstName: string
+  lastName: string
+  email: string
+  /** E.164, or null when the student has no phone number on file. */
+  phoneE164: string | null
+  phoneVerified: boolean
+}
+
+/**
  * The payload under `data` in a successful response. Pages are keyed by
  * their 1-based page number as a string: `pages["1"]`, `pages["2"]`, …
  */
 export type DashboardResponse = {
   studentId: number
   date: string
+  student: StudentProfile
   totalApplications: number
   pageSize: number
   totalPages: number

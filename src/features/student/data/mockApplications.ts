@@ -178,6 +178,15 @@ const TOTAL_TODAY = TODAYS_APPLICATIONS.length
 export const MOCK_DASHBOARD: DashboardResponse = {
   studentId: 1000000002,
   date: '2026-10-29',
+  // Mock-mode student profile (same shape as the backend `data.student`).
+  // Only ever served by MockStudentService — live mode never uses it.
+  student: {
+    firstName: 'John',
+    lastName: 'Doe',
+    email: 'john.doe@example.com',
+    phoneE164: '+17135550123',
+    phoneVerified: true
+  },
   totalApplications: TOTAL_TODAY,
   pageSize: PAGE_SIZE,
   totalPages: Math.ceil(TOTAL_TODAY / PAGE_SIZE),

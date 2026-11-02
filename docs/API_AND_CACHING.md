@@ -4,7 +4,8 @@ Reference for how the student frontend talks to `StudentLambda` and how
 responses are cached. Describes only what is actually implemented in the
 codebase; anything not implemented is called out explicitly.
 
-- Backend contract: [`API.md`](../API.md) (version dated 2026-10-29)
+- Backend contract: [`API.md`](../API.md) (version dated 2026-10-29, plus the
+  `data.student` profile object — see "Student profile" below)
 - Data-fetching library: [TanStack Query v5](https://tanstack.com/query/v5)
 - HTTP layer: hand-rolled `fetch` wrapper, no axios
 
@@ -142,15 +143,64 @@ So in a typical dev session the key is literally
 
 ### Shared consumers
 
-Four places subscribe to the same key, so TanStack Query dedupes them to
+Five places subscribe to the same key, so TanStack Query dedupes them to
 **one** actual fetch:
 
 | File | Why it subscribes |
 |---|---|
 | [`StudentLayout.tsx`](../src/components/layout/StudentLayout.tsx) | needs `data.statistics.timezone` + `data.date` to drive the midnight-rollover scheduler |
-| [`StudentDashboardPage.tsx`](../src/features/student/pages/StudentDashboardPage.tsx) | renders stats + preview tiles |
+| [`StudentDashboardPage.tsx`](../src/features/student/pages/StudentDashboardPage.tsx) | renders stats + preview tiles; greeting name from `data.student.firstName` (via `useStudentProfile`) |
+| [`StudentProfilePage.tsx`](../src/features/student/pages/StudentProfilePage.tsx) | renders name, email, phone and verification from `data.student` (via `useStudentProfile`) |
 | [`StudentApplicationsPage.tsx`](../src/features/student/pages/StudentApplicationsPage.tsx) | renders `data.pages` with Prev/Next |
 | [`ApplicationDetailsPage.tsx`](../src/features/student/pages/ApplicationDetailsPage.tsx) | scans all `data.pages[*]` for the id |
+
+### Student profile (`data.student`)
+
+The student's profile is returned **inside** the same
+`GET /api/v1/student/applications` response — there is no profile endpoint
+and no second request. Backend/MySQL is the data source in live mode.
+
+```ts
+// src/features/student/data/apiTypes.ts
+type StudentProfile = {
+  firstName: string
+  lastName: string
+  email: string
+  phoneE164: string | null   // null = no phone on file
+  phoneVerified: boolean
+}
+// DashboardResponse.student: StudentProfile
+```
+
+How it is consumed:
+
+- [`useStudentProfile()`](../src/features/student/hooks/useStudentProfile.ts)
+  is a **selector over `useStudentDashboard()`**, not a query. It adds no
+  cache key and issues no request, so the profile inherits the dashboard's
+  one-hour freshness, hourly refetch, midnight invalidation, Refresh button
+  and logout clearing automatically.
+- [`parseStudentProfile()`](../src/features/student/lib/studentProfile.ts)
+  validates `data.student` at the point of use. A missing or wrongly-typed
+  field is treated as a contract error: the Profile page shows "Profile
+  details are unavailable" with Retry, the greeting stays neutral, and the
+  rest of the dashboard keeps working. In development the field **names**
+  (never values) are logged with `console.error`.
+- Identity shown in the UI comes **only** from `data.student`. The mock
+  auth session (`useAuth().user`) is used for route access and sign-out
+  only; it is never read for names, email, phone or verification.
+
+Display rules:
+
+| UI | Source / behaviour |
+|---|---|
+| Dashboard greeting | `"<Good morning/afternoon/evening>, <firstName>!"`; `"Welcome back!"` while loading, on error, or if the profile is invalid |
+| Profile name / rows | `firstName`, `lastName`, `email` verbatim; blank values render "Not available" |
+| Phone | `phoneE164` verbatim (no country code is ever added or inferred); `null` → "Not available" |
+| Badge | `phoneVerified === true` → **Verified**; `false` → **Not Verified**; no badge when there is no phone |
+| Loading / error | skeleton / error card with Retry (`refetch()`); never mock identity in live mode |
+
+Mock mode serves `MOCK_DASHBOARD.student` (John Doe) through the same
+`MockStudentService`; live mode never falls back to it.
 
 ### Navigating between dashboard pages
 
@@ -466,6 +516,9 @@ useQuery({
 | 16 | Clicking Retry after an error | **Yes — 1** | `refetch()` |
 | 17 | Visiting Notifications / Profile only | **No** | `useStudentDashboard` is also mounted at `StudentLayout`, so the first entry into `/student` does trigger scenario #1, but staying inside the student shell afterward does not add any calls |
 | 18 | `VITE_STUDENT_API_MODE=mock` (default) | **No** | `MockStudentService` returns in-process `MOCK_DASHBOARD` |
+| 19 | Dashboard → Profile (or opening the Profile page while the dashboard cache is fresh) | **No** | `useStudentProfile` is a selector over the shared dashboard query; `data.student` is already cached |
+| 20 | Hard-refresh / deep link straight to `/student/profile` | **Yes — 1** | cold cache; the one dashboard fetch also carries `data.student` |
+| 21 | Student switch on the same device | **Yes — 1** (for the new student) | cache is keyed per student and cleared on logout, so the previous profile is never shown |
 
 ### What is **not** implemented (so you don't over-estimate the cost)
 

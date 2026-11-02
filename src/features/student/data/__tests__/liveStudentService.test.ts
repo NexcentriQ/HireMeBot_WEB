@@ -27,6 +27,13 @@ describe('LiveStudentService / studentHttpGet', () => {
             data: {
               studentId: 1000000002,
               date: '2026-10-29',
+              student: {
+                firstName: 'Sarah',
+                lastName: 'Johnson',
+                email: 'sarah.johnson@example.com',
+                phoneE164: '+17135550123',
+                phoneVerified: true
+              },
               totalApplications: 0,
               pageSize: 20,
               totalPages: 0,
@@ -72,6 +79,78 @@ describe('LiveStudentService / studentHttpGet', () => {
     const headers = new Headers(init!.headers as HeadersInit)
     expect(headers.get('X-Dev-Student-Id')).toBe('1000000002')
     expect(init!.method).toBe('GET')
+  })
+
+  it.each([
+    { phoneE164: '+17135550123', phoneVerified: true },
+    { phoneE164: '+17135550123', phoneVerified: false },
+    { phoneE164: null, phoneVerified: false }
+  ])(
+    'returns data.student verbatim from the single dashboard call (%j) with no profile request',
+    async (phone) => {
+      const student = {
+        firstName: 'Sarah',
+        lastName: 'Johnson',
+        email: 'sarah.johnson@example.com',
+        ...phone
+      }
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              studentId: 1000000002,
+              date: '2026-11-02',
+              student,
+              totalApplications: 0,
+              pageSize: 20,
+              totalPages: 0,
+              pages: {},
+              statistics: {}
+            }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      )
+
+      const { LiveStudentService } = await import('../studentService')
+      const result = await new LiveStudentService().getDashboard()
+
+      expect(result.student).toEqual(student)
+      // Exactly one request, to the existing dashboard endpoint — never a profile endpoint.
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(String(fetchSpy.mock.calls[0]![0])).toBe(
+        'http://127.0.0.1:3000/api/v1/student/applications'
+      )
+      expect(String(fetchSpy.mock.calls[0]![0])).not.toMatch(/profile/i)
+    }
+  )
+
+  it('live mode never falls back to mock profile data when the backend fails', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: false,
+          error: 'SERVICE_UNAVAILABLE',
+          message: 'The service is temporarily unavailable.'
+        }),
+        { status: 503, headers: { 'content-type': 'application/json' } }
+      )
+    )
+
+    // Go through the public facade, which is what the UI uses.
+    const { studentService } = await import('../studentService')
+    const { ApiError } = await import('../http')
+    let resolved: unknown
+    let caught: unknown
+    try {
+      resolved = await studentService.getDashboard()
+    } catch (e) {
+      caught = e
+    }
+    expect(resolved).toBeUndefined() // no mock dashboard handed back
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as InstanceType<typeof ApiError>).status).toBe(503)
   })
 
   it('wraps a 403 error-envelope response in ApiError', async () => {
