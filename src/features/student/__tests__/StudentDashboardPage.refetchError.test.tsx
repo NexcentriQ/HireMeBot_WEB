@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
+import { setFakeCognitoUser } from '@/test/fakeAmplifyAuth'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -11,18 +12,13 @@ import { MOCK_DASHBOARD } from '../data/mockApplications'
 import { studentService } from '../data/studentService'
 
 function seedUser() {
-  window.localStorage.setItem(
-    'hmb.mock.user',
-    JSON.stringify({
-      id: 'u1',
-      role: 'STUDENT',
-      firstName: 'John',
-      lastName: 'Doe',
-      email: 'john.doe@example.com',
-      phoneE164: '+17135551234',
-      activated: true
-    })
-  )
+  setFakeCognitoUser({
+    sub: 'u1',
+    givenName: 'John',
+    familyName: 'Doe',
+    email: 'john.doe@example.com',
+    emailVerified: true
+  })
 }
 
 /**

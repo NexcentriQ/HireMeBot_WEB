@@ -185,7 +185,7 @@ How it is consumed:
   details are unavailable" with Retry, the greeting stays neutral, and the
   rest of the dashboard keeps working. In development the field **names**
   (never values) are logged with `console.error`.
-- Identity shown in the UI comes **only** from `data.student`. The mock
+- Identity shown in the UI comes **only** from `data.student`. The Cognito
   auth session (`useAuth().user`) is used for route access and sign-out
   only; it is never read for names, email, phone or verification.
 

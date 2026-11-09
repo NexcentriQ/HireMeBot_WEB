@@ -4,7 +4,7 @@ import { SignupPage } from '@/features/auth/pages/SignupPage'
 import { VerifyPhonePage } from '@/features/auth/pages/VerifyPhonePage'
 import { ConnectGooglePage } from '@/features/auth/pages/ConnectGooglePage'
 import { AuthCallbackPage } from '@/features/auth/pages/AuthCallbackPage'
-import { SignupSuccessPage } from '@/features/auth/pages/SignupSuccessPage'
+import { AccountStatusPage } from '@/features/auth/pages/AccountStatusPage'
 import { StudentDashboardPage } from '@/features/student/pages/StudentDashboardPage'
 import { StudentApplicationsPage } from '@/features/student/pages/StudentApplicationsPage'
 import { ApplicationDetailsPage } from '@/features/student/pages/ApplicationDetailsPage'
@@ -13,16 +13,24 @@ import { StudentNotificationsPage } from '@/features/student/pages/StudentNotifi
 import { StudentLayout } from '@/components/layout/StudentLayout'
 import {
   GuestOnly,
-  RequireActivatedUser,
+  RequireAccountStatus,
+  RequireInterruptedSignup,
   RequirePendingRegistration,
-  RequireStudent
+  RequireSignupForm,
+  RequireStudent,
+  RootRedirect
 } from '@/routes/guards'
 import { NotFoundPage } from '@/routes/NotFoundPage'
 
+/**
+ * New student:      Continue with Google → /auth/callback → GET /auth/me (SIGNUP_FORM)
+ *                   → /signup → /verify-phone (dev OTP) → POST /students/register → dashboard
+ * Existing student: Continue with Google → /auth/callback → GET /auth/me (DASHBOARD) → dashboard
+ */
 export function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route path="/" element={<RootRedirect />} />
 
       <Route
         path="/login"
@@ -35,9 +43,9 @@ export function App() {
       <Route
         path="/signup"
         element={
-          <GuestOnly>
+          <RequireSignupForm>
             <SignupPage />
-          </GuestOnly>
+          </RequireSignupForm>
         }
       />
       <Route
@@ -51,18 +59,18 @@ export function App() {
       <Route
         path="/connect-google"
         element={
-          <RequirePendingRegistration needsPhoneVerified>
+          <RequireInterruptedSignup>
             <ConnectGooglePage />
-          </RequirePendingRegistration>
+          </RequireInterruptedSignup>
         }
       />
       <Route path="/auth/callback" element={<AuthCallbackPage />} />
       <Route
-        path="/signup-success"
+        path="/account-status"
         element={
-          <RequireActivatedUser>
-            <SignupSuccessPage />
-          </RequireActivatedUser>
+          <RequireAccountStatus>
+            <AccountStatusPage />
+          </RequireAccountStatus>
         }
       />
 

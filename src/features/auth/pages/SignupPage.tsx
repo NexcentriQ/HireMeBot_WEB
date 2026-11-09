@@ -1,14 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Link, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { User, Phone } from 'lucide-react'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { Logo } from '@/components/common/Logo'
 import { Button } from '@/components/ui/button'
 import { InputGroup, UnstyledInput } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
+import { parsePhoneNumberFromString } from 'libphonenumber-js'
 import { signupSchema, toE164, type SignupFormValues } from '../schemas'
+import { readOnboardingDraft, saveOnboardingDraft } from '../services/onboardingDraft'
+import { getPhoneVerificationService } from '../services/phoneVerification'
+import type { FieldError } from '../services/studentAccountApi'
 import { useAuth } from '../AuthProvider'
 import { useToast } from '@/components/common/ToastProvider'
 
@@ -20,31 +24,76 @@ import { useToast } from '@/components/common/ToastProvider'
 const SIGNUP_COUNTRY_CODE = 'US'
 const SIGNUP_DIAL_CODE = '+1'
 
+/**
+ * Set by the registration step when `POST /students/register` rejected the
+ * details (VALIDATION_FAILED or NAME_ALREADY_REGISTERED).
+ */
+export type SignupRouteState = {
+  registrationError?: { message: string; fieldErrors: FieldError[] }
+}
+
+/** Backend field name → form field name. */
+const SERVER_FIELD_TO_FORM: Record<string, keyof SignupFormValues> = {
+  firstName: 'firstName',
+  lastName: 'lastName',
+  phoneNumber: 'phoneNumber',
+  acceptedTerms: 'agreedToTerms'
+}
+
+/**
+ * Restores what this student already typed: coming back from Verify Phone, or
+ * resuming after the session had to be renewed with Google.
+ */
+function initialValues(ownerSub: string | undefined): SignupFormValues {
+  const draft = ownerSub ? readOnboardingDraft(ownerSub) : null
+  return {
+    firstName: draft?.firstName ?? '',
+    lastName: draft?.lastName ?? '',
+    countryCode: SIGNUP_COUNTRY_CODE,
+    phoneNumber: draft ? (parsePhoneNumberFromString(draft.phoneE164)?.formatNational() ?? '') : '',
+    agreedToTerms: (draft?.acceptedTerms ?? false) as unknown as true
+  }
+}
+
 export function SignupPage() {
   const navigate = useNavigate()
-  const { authService } = useAuth()
+  const location = useLocation()
   const toast = useToast()
+  const { user, logout } = useAuth()
   const [submitting, setSubmitting] = useState(false)
+  const [defaultValues] = useState(() => initialValues(user?.userId))
+  const registrationError = (location.state as SignupRouteState | null)?.registrationError
+  const [formError, setFormError] = useState<string | null>(null)
 
   const {
     control,
     register,
     handleSubmit,
+    setError,
     formState: { errors, isValid }
   } = useForm<SignupFormValues>({
     resolver: zodResolver(signupSchema),
     mode: 'onChange',
-    defaultValues: {
-      firstName: '',
-      lastName: '',
-      countryCode: SIGNUP_COUNTRY_CODE,
-      phoneNumber: '',
-      agreedToTerms: false as unknown as true
-    }
+    defaultValues
   })
 
+  // Show the backend's messages on the matching fields.
+  useEffect(() => {
+    if (!registrationError) return
+    const unmatched: string[] = []
+    for (const fieldError of registrationError.fieldErrors) {
+      const field = SERVER_FIELD_TO_FORM[fieldError.field]
+      if (field) setError(field, { type: 'server', message: fieldError.message }, { shouldFocus: true })
+      else unmatched.push(fieldError.message)
+    }
+    if (registrationError.fieldErrors.length === 0 || unmatched.length > 0) {
+      setFormError(unmatched.length > 0 ? unmatched.join(' ') : registrationError.message)
+    }
+  }, [registrationError, setError])
+
   async function onSubmit(values: SignupFormValues) {
-    if (submitting) return
+    if (submitting || !user) return
+    setFormError(null)
     const e164 = toE164(values.countryCode, values.phoneNumber)
     if (!e164) {
       toast.show('Please enter a valid phone number.', 'error')
@@ -52,13 +101,19 @@ export function SignupPage() {
     }
     setSubmitting(true)
     try {
-      const pending = await authService.startRegistration({
-        firstName: values.firstName.trim(),
-        lastName: values.lastName.trim(),
+      // Short-lived, tab-scoped draft bound to this Google identity. Nothing
+      // is sent to the backend until the OTP step finishes.
+      saveOnboardingDraft({
+        ownerSub: user.userId,
+        firstName: values.firstName,
+        lastName: values.lastName,
         phoneE164: e164,
-        agreedToTerms: values.agreedToTerms
+        acceptedTerms: values.agreedToTerms
       })
-      await authService.sendPhoneOtp(pending.registrationId)
+      const phoneVerification = getPhoneVerificationService()
+      if (phoneVerification.available) {
+        await phoneVerification.sendCode(e164)
+      }
       navigate('/verify-phone')
     } catch (err) {
       toast.show(err instanceof Error ? err.message : 'Could not start registration.', 'error')
@@ -170,6 +225,12 @@ export function SignupPage() {
             </p>
           )}
 
+          {formError && (
+            <p role="alert" className="text-sm text-destructive">
+              {formError}
+            </p>
+          )}
+
           <Button
             type="submit"
             size="lg"
@@ -180,11 +241,20 @@ export function SignupPage() {
             Continue
           </Button>
 
+          {/* The Gmail address comes from Cognito and is never typed in. */}
           <p className="text-center text-sm text-muted-foreground pt-2">
-            Already have an account?{' '}
-            <Link to="/login" className="text-primary font-semibold hover:underline">
-              Log In
-            </Link>
+            {user?.email ? (
+              <>
+                Signing up as <span className="font-medium text-foreground">{user.email}</span>.{' '}
+              </>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="text-primary font-semibold hover:underline"
+            >
+              Use a different Google account
+            </button>
           </p>
         </form>
       </div>

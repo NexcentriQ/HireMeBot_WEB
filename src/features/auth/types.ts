@@ -1,87 +1,85 @@
-export type UserRole = 'STUDENT' | 'RECRUITER' | 'MANAGER'
-
-export type AuthenticatedUser = {
-  id: string
-  role: UserRole
-  firstName: string
-  lastName: string
-  email: string
-  phoneE164: string
-  activated: boolean
+/**
+ * Identity of the signed-in user as reported by Amazon Cognito.
+ *
+ * Built from the Cognito ID token that Amplify received directly from the
+ * Cognito token endpoint. Fields are suitable for display and routing only —
+ * the browser does not verify JWT signatures, so any authorization decision
+ * (student role, onboarding state, phone verification) must be made by the
+ * backend after it verifies the token.
+ *
+ * Deliberately absent: `role`, `activated`, `phoneVerified`. Cognito is not
+ * configured to issue those claims and the frontend must not invent them.
+ */
+export type AuthUser = {
+  /** Cognito `sub` — the immutable, canonical identity key. Never link accounts by email. */
+  userId: string
+  /** Cognito username (federated users look like `google_1234…`). */
+  username: string
+  email: string | null
+  /** `email_verified` claim as issued by Cognito (display hint only). */
+  emailVerified: boolean | null
+  givenName: string | null
+  familyName: string | null
+  /** Federated provider name from the `identities` claim, e.g. `Google`. */
+  identityProvider: string | null
 }
 
-/** Non-sensitive handle for a server-side pending registration. */
-export type PendingRegistration = {
-  registrationId: string
-  firstName: string
-  lastName: string
-  phoneE164: string
-  phoneVerified: boolean
-  createdAt: number
-}
+/** Which UI journey started a Google redirect. Drives where the callback lands. */
+export type SignInFlow = 'login' | 'signup'
 
-export type StartRegistrationInput = {
-  firstName: string
-  lastName: string
-  phoneE164: string
-  agreedToTerms: boolean
-}
+export type AuthErrorCode =
+  | 'NOT_CONFIGURED'
+  | 'REDIRECT_MISMATCH'
+  | 'GOOGLE_CANCELLED'
+  | 'GOOGLE_SIGN_IN_FAILED'
+  | 'ALREADY_SIGNED_IN'
+  | 'SESSION_UNAVAILABLE'
+  | 'NETWORK'
+  | 'INVALID_OTP'
+  | 'INVALID_OTP_FORMAT'
+  | 'RESEND_THROTTLED'
+  | 'PHONE_VERIFICATION_UNAVAILABLE'
+  | 'UNKNOWN'
 
-export type VerifyPhoneOtpInput = {
-  registrationId: string
-  code: string
+/**
+ * User-safe error. `message` is always suitable for display: it never
+ * contains tokens, secrets, or raw SDK exception text in production builds.
+ */
+export class AuthServiceError extends Error {
+  code: AuthErrorCode
+
+  constructor(code: AuthErrorCode, message: string) {
+    super(message)
+    this.code = code
+    this.name = 'AuthServiceError'
+  }
 }
 
 export type ResendOtpResult = {
   nextResendInSeconds: number
 }
 
-export type StartGoogleAuthOptions = {
-  registrationId?: string
+/**
+ * Result of a phone-code check.
+ *
+ * `dev-simulated` means the development-only mock accepted the fixed test
+ * code. It is NOT evidence that the user owns the phone number and must never
+ * be persisted or sent anywhere as `phone_verified=true`. A future real
+ * provider would return a server-issued, server-verifiable proof instead.
+ */
+export type PhoneCodeCheckResult = {
+  outcome: 'dev-simulated'
 }
 
-export type GoogleAuthenticationResult = {
-  /** Backend-issued session reference. Never contains raw Cognito tokens for mock. */
-  sessionRef: string
-  email: string
-  emailVerified: boolean
-}
-
-export type ActivateAccountInput = {
-  registrationId: string
-  sessionRef: string
-}
-
-export type AuthService = {
-  startRegistration(input: StartRegistrationInput): Promise<PendingRegistration>
-  sendPhoneOtp(registrationId: string): Promise<ResendOtpResult>
-  verifyPhoneOtp(input: VerifyPhoneOtpInput): Promise<PendingRegistration>
-  resendPhoneOtp(registrationId: string): Promise<ResendOtpResult>
-  startGoogleAuthentication(opts: StartGoogleAuthOptions): Promise<{ redirectUrl: string }>
-  completeGoogleAuthentication(callbackParams: Record<string, string>): Promise<GoogleAuthenticationResult>
-  activateStudentAccount(input: ActivateAccountInput): Promise<AuthenticatedUser>
-  getCurrentUser(): Promise<AuthenticatedUser | null>
-  logout(): Promise<void>
-}
-
-export class AuthServiceError extends Error {
-  code:
-    | 'INVALID_OTP'
-    | 'EXPIRED_OTP'
-    | 'TOO_MANY_ATTEMPTS'
-    | 'RESEND_THROTTLED'
-    | 'REGISTRATION_NOT_FOUND'
-    | 'REGISTRATION_EXPIRED'
-    | 'PHONE_NOT_VERIFIED'
-    | 'GOOGLE_CANCELLED'
-    | 'GOOGLE_EMAIL_UNVERIFIED'
-    | 'ACCOUNT_CONFLICT'
-    | 'NETWORK'
-    | 'UNKNOWN'
-
-  constructor(code: AuthServiceError['code'], message: string) {
-    super(message)
-    this.code = code
-    this.name = 'AuthServiceError'
-  }
+/**
+ * Seam for phone verification so a real SMS provider (Cognito SMS, a backend
+ * OTP endpoint, …) can replace the development mock without touching the
+ * Verify Phone screen.
+ */
+export interface PhoneVerificationService {
+  /** `false` when no verification provider exists in this build (production today). */
+  readonly available: boolean
+  sendCode(phoneE164: string): Promise<ResendOtpResult>
+  resendCode(phoneE164: string): Promise<ResendOtpResult>
+  verifyCode(phoneE164: string, code: string): Promise<PhoneCodeCheckResult>
 }

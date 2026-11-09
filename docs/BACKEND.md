@@ -1,9 +1,16 @@
 # Backend & Cognito dependencies
 
-The frontend currently runs against `MockAuthService`. This document captures
-exactly what the real backend and the Cognito User Pool must provide before
-`CognitoAuthService` can replace the mock, and where the integration seams
-live in the frontend code.
+> **Update:** Google sign-in through Amazon Cognito is now implemented in the
+> frontend with AWS Amplify v6 (Authorization Code + PKCE, public app
+> client). `MockAuthService` and `CognitoAuthService` were removed. The
+> current integration, the proposed `GET /students/me` /
+> `POST /students/onboarding` contracts, and the remaining backend work are
+> documented in [`COGNITO_GOOGLE_AUTH.md`](COGNITO_GOOGLE_AUTH.md). The
+> registration/OTP endpoints below are still the reference design for the
+> deferred server-side phone verification.
+
+This document captures what the real backend and the Cognito User Pool must
+provide, and where the integration seams live in the frontend code.
 
 ## Amazon Cognito User Pool
 

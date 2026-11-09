@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, ShieldCheck } from 'lucide-react'
 import { AuthLayout } from '@/components/layout/AuthLayout'
@@ -6,44 +6,35 @@ import { LogoMark } from '@/components/common/Logo'
 import { Button } from '@/components/ui/button'
 import { GoogleIcon } from '@/components/common/GoogleIcon'
 import { GraduateIllustration } from '@/components/common/GraduateIllustration'
-import { useAuth } from '../AuthProvider'
-import { readPendingRegistration } from '../services/MockAuthService'
+import { readOnboardingDraft } from '../services/onboardingDraft'
+import { useGoogleSignIn } from '../hooks/useGoogleSignIn'
 import { useToast } from '@/components/common/ToastProvider'
-import { AuthServiceError } from '../types'
+import { routeForAccount } from '../account'
 
+/**
+ * Shown when the session ended in the middle of signup (refresh token
+ * expired/revoked, or the API answered 401). The signup draft is kept in
+ * sessionStorage; after Continue with Google the callback re-runs
+ * `GET /auth/me` and, on SIGNUP_FORM, restores the draft for the same
+ * identity (STUDENT_AUTH_API.md §7).
+ */
 export function ConnectGooglePage() {
   const navigate = useNavigate()
-  const { authService } = useAuth()
   const toast = useToast()
-  const [loading, setLoading] = useState(false)
-  const [pending] = useState(() => readPendingRegistration())
+  const { start, redirecting } = useGoogleSignIn('signup')
+  const [draft] = useState(() => readOnboardingDraft())
 
-  useEffect(() => {
-    if (!pending) {
-      navigate('/signup', { replace: true })
-      return
-    }
-    if (!pending.phoneVerified) {
-      navigate('/verify-phone', { replace: true })
-    }
-  }, [pending, navigate])
-
-  if (!pending) return null
+  if (!draft) return null
 
   async function handleContinue() {
-    setLoading(true)
-    try {
-      const { redirectUrl } = await authService.startGoogleAuthentication({
-        registrationId: pending!.registrationId
-      })
-      window.location.assign(redirectUrl)
-    } catch (err) {
-      setLoading(false)
-      if (err instanceof AuthServiceError && err.code === 'PHONE_NOT_VERIFIED') {
-        navigate('/verify-phone', { replace: true })
-        return
-      }
-      toast.show(err instanceof Error ? err.message : 'Google sign-in could not start.', 'error')
+    // Real Google sign-in through Amazon Cognito (OAuth code + PKCE). The
+    // browser leaves for Cognito → Google and returns to /auth/callback.
+    const result = await start()
+    if (!result) return // a redirect is already starting
+    if (result.status === 'already-signed-in') {
+      navigate(routeForAccount(result.account), { replace: true })
+    } else if (result.status === 'error') {
+      toast.show(result.error.message, 'error')
     }
   }
 
@@ -51,7 +42,7 @@ export function ConnectGooglePage() {
     <AuthLayout
       topBar={
         <Link
-          to="/verify-phone"
+          to="/login"
           aria-label="Back"
           className="inline-flex h-10 w-10 items-center justify-center rounded-full text-primary hover:bg-accent"
         >
@@ -63,7 +54,8 @@ export function ConnectGooglePage() {
         <LogoMark size={56} className="mt-4" />
         <h1 className="mt-4 text-2xl font-bold">Continue with Google</h1>
         <p className="mt-2 text-sm text-muted-foreground max-w-xs">
-          Sign in with your Google account to complete your registration.
+          Your session ended. Sign in with the same Google account to finish your registration — your
+          details are saved.
         </p>
 
         <Button
@@ -71,7 +63,7 @@ export function ConnectGooglePage() {
           variant="outline"
           size="lg"
           className="w-full mt-8 bg-card"
-          loading={loading}
+          loading={redirecting}
           onClick={handleContinue}
         >
           <GoogleIcon />

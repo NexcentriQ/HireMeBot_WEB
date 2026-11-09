@@ -1,20 +1,27 @@
 import { z } from 'zod'
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js'
 
+/**
+ * Mirrors `POST /api/v1/students/register` (STUDENT_AUTH_API.md §4):
+ * trimmed, 1–100 characters, letters of any language plus spaces, ' ’ - .,
+ * and must start with a letter. The backend re-validates everything.
+ */
+const NAME_PATTERN = /^\p{L}[\p{L}\p{M}'’\-. ]*$/u
+const NAME_MESSAGE = 'Use letters, spaces, apostrophes, hyphens, or periods, starting with a letter'
+
+function nameField(label: string) {
+  return z
+    .string()
+    .trim()
+    .min(1, `${label} is required`)
+    .max(100, `${label} is too long`)
+    .regex(NAME_PATTERN, NAME_MESSAGE)
+}
+
 export const signupSchema = z
   .object({
-    firstName: z
-      .string()
-      .trim()
-      .min(1, 'First name is required')
-      .max(50, 'First name is too long')
-      .regex(/^[\p{L}\p{M}'’\- ]+$/u, 'Only letters, spaces, hyphens, and apostrophes'),
-    lastName: z
-      .string()
-      .trim()
-      .min(1, 'Last name is required')
-      .max(50, 'Last name is too long')
-      .regex(/^[\p{L}\p{M}'’\- ]+$/u, 'Only letters, spaces, hyphens, and apostrophes'),
+    firstName: nameField('First name'),
+    lastName: nameField('Last name'),
     countryCode: z.string().min(2),
     phoneNumber: z.string().trim().min(1, 'Phone number is required'),
     agreedToTerms: z.literal(true, {

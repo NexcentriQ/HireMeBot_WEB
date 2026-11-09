@@ -1,64 +1,85 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '../AuthProvider'
-import { readPendingRegistration } from '../services/MockAuthService'
+import { completeRedirectSignIn } from '../services/authService'
+import { AUTH_MESSAGES, logAuthIssue, toAuthServiceError } from '../services/authErrors'
+import { clearRedirectIntent, readRedirectIntent } from '../services/redirectIntent'
+import { clearOnboardingDraft, readOnboardingDraft } from '../services/onboardingDraft'
+import { routeForAccount } from '../account'
 import { AuthServiceError } from '../types'
 
 type Status = 'processing' | 'error'
 
+/**
+ * Landing page for Cognito's OAuth redirect (`/auth/callback`).
+ *
+ * Amplify performs the authorization-code + PKCE exchange on its own as soon
+ * as it is configured; this page waits for that to settle (it never shows an
+ * error while the exchange is still running), asks the backend who the user
+ * is (`GET /api/v1/auth/me`, via `refresh()`), and navigates on `nextStep`:
+ *
+ *   DASHBOARD        → saved student page or the dashboard (draft cleared)
+ *   SIGNUP_FORM      → signup form (draft kept only if this identity wrote it)
+ *   ACCOUNT_PENDING  → account status screen (draft cleared)
+ *   403 / 409 / 5xx  → account status screen (never the signup form)
+ */
 export function AuthCallbackPage() {
   const navigate = useNavigate()
-  const { authService, refresh } = useAuth()
-  const [params] = useSearchParams()
+  const { refresh } = useAuth()
   const [status, setStatus] = useState<Status>('processing')
   const [message, setMessage] = useState('Finishing your sign-in…')
-  const ran = useRef(false)
+  // StrictMode mounts effects twice. `started` makes the work run once;
+  // `mounted` (re-set on the second mount) lets that single run still
+  // navigate, so there is exactly one redirect.
+  const started = useRef(false)
+  const mounted = useRef(false)
 
   useEffect(() => {
-    if (ran.current) return
-    ran.current = true
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+
+    const intent = readRedirectIntent()
 
     async function run() {
       try {
-        const callback = Object.fromEntries(params.entries())
-        const result = await authService.completeGoogleAuthentication(callback)
-        if (!result.emailVerified) {
-          setStatus('error')
-          setMessage('Google did not return a verified email. Please try again.')
-          return
+        await completeRedirectSignIn()
+        // Syncs the session AND runs GET /auth/me before navigating, so the
+        // guards see the account state the backend reported.
+        const { user, account } = await refresh()
+        if (!user) throw new AuthServiceError('SESSION_UNAVAILABLE', AUTH_MESSAGES.sessionUnavailable)
+        clearRedirectIntent()
+
+        if (account.status === 'unregistered') {
+          // Restore an interrupted signup only for the identity that typed it.
+          readOnboardingDraft(user.userId)
+        } else if (account.status !== 'error') {
+          clearOnboardingDraft()
         }
-        const pending = readPendingRegistration()
-        if (!pending || !pending.phoneVerified) {
-          setStatus('error')
-          setMessage('We could not find a verified phone registration. Please start again.')
-          return
-        }
-        await authService.activateStudentAccount({
-          registrationId: pending.registrationId,
-          sessionRef: result.sessionRef
-        })
-        await refresh()
-        navigate('/signup-success', { replace: true })
+        if (mounted.current) navigate(routeForAccount(account, intent?.returnTo), { replace: true })
       } catch (err) {
+        logAuthIssue('OAuth callback failed', err)
+        clearRedirectIntent()
+        if (!mounted.current) return
         setStatus('error')
-        if (err instanceof AuthServiceError) {
-          if (err.code === 'GOOGLE_CANCELLED') {
-            setMessage('Sign-in was cancelled. You can try again when you’re ready.')
-          } else if (err.code === 'ACCOUNT_CONFLICT') {
-            setMessage('This Google account is already linked to another HireMeBot user.')
-          } else {
-            setMessage(err.message)
-          }
-        } else {
-          setMessage('Something went wrong while completing sign-in.')
-        }
+        setMessage(toAuthServiceError(err).message)
       }
     }
-    run()
-  }, [authService, navigate, params, refresh])
+    void run()
+  }, [navigate, refresh])
+
+  function tryAgain() {
+    navigate(readOnboardingDraft() ? '/connect-google' : '/login', { replace: true })
+  }
 
   return (
     <AuthLayout dark>
@@ -66,7 +87,9 @@ export function AuthCallbackPage() {
         {status === 'processing' ? (
           <>
             <Loader2 className="h-10 w-10 text-primary animate-spin" aria-hidden="true" />
-            <p className="mt-5 text-base text-muted-foreground">{message}</p>
+            <p className="mt-5 text-base text-muted-foreground" role="status">
+              {message}
+            </p>
           </>
         ) : (
           <>
@@ -74,13 +97,12 @@ export function AuthCallbackPage() {
               <AlertTriangle className="h-8 w-8" />
             </div>
             <h1 className="mt-4 text-xl font-bold">Sign-in incomplete</h1>
-            <p className="mt-2 text-sm text-muted-foreground max-w-sm">{message}</p>
+            <p role="alert" className="mt-2 text-sm text-muted-foreground max-w-sm">
+              {message}
+            </p>
             <div className="mt-6 w-full flex flex-col gap-3">
-              <Button size="lg" onClick={() => navigate('/connect-google', { replace: true })}>
+              <Button size="lg" onClick={tryAgain}>
                 Try again
-              </Button>
-              <Button variant="outline" size="lg" onClick={() => navigate('/signup', { replace: true })}>
-                Back to signup
               </Button>
             </div>
           </>

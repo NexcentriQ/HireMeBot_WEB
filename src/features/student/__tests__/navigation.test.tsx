@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest'
+import { setFakeCognitoUser } from '@/test/fakeAmplifyAuth'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
@@ -9,18 +10,13 @@ import { ToastProvider } from '@/components/common/ToastProvider'
 import { App } from '@/app/App'
 
 function seedUser() {
-  window.localStorage.setItem(
-    'hmb.mock.user',
-    JSON.stringify({
-      id: 'u1',
-      role: 'STUDENT',
-      firstName: 'John',
-      lastName: 'Doe',
-      email: 'john.doe@example.com',
-      phoneE164: '+17135551234',
-      activated: true
-    })
-  )
+  setFakeCognitoUser({
+    sub: 'u1',
+    givenName: 'John',
+    familyName: 'Doe',
+    email: 'john.doe@example.com',
+    emailVerified: true
+  })
 }
 
 function renderApp(route: string) {
@@ -69,7 +65,7 @@ describe('student navigation', () => {
   })
 
   it('protects student routes when no user is logged in', async () => {
-    window.localStorage.clear()
+    setFakeCognitoUser(null)
     renderApp('/student/dashboard')
     expect(await screen.findByRole('button', { name: /continue with google/i })).toBeInTheDocument()
   })

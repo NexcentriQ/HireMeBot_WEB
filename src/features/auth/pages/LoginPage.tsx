@@ -1,48 +1,39 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { Logo } from '@/components/common/Logo'
 import { Button } from '@/components/ui/button'
 import { GoogleIcon } from '@/components/common/GoogleIcon'
-import { useAuth } from '@/features/auth/AuthProvider'
+import { useGoogleSignIn } from '@/features/auth/hooks/useGoogleSignIn'
+import { isSafeReturnPath } from '@/features/auth/services/redirectIntent'
+import { routeForAccount } from '@/features/auth/account'
 import { useToast } from '@/components/common/ToastProvider'
 
+/**
+ * One button serves new and returning students: after Google, the backend
+ * (`GET /auth/me`) decides between the dashboard and the signup form. The
+ * "Sign Up" link therefore starts the same Google flow.
+ */
 export function LoginPage() {
   const navigate = useNavigate()
-  const { authService, refresh } = useAuth()
+  const location = useLocation()
   const toast = useToast()
-  const [loading, setLoading] = useState(false)
+  const { start, redirecting } = useGoogleSignIn('login')
+  const signup = useGoogleSignIn('signup')
+  const busy = redirecting || signup.redirecting
+  // Set by RequireStudent when an unauthenticated user opened a protected page.
+  const from = (location.state as { from?: unknown } | null)?.from
+  const returnTo = isSafeReturnPath(from) ? from : null
 
-  async function handleGoogle() {
-    setLoading(true)
-    try {
-      // MOCK FLOW: existing-user login creates an activated student session
-      // and navigates to the dashboard. Real Cognito flow would redirect
-      // through the hosted UI and return via /auth/callback.
-      const result = await authService.completeGoogleAuthentication({})
-      if (!result.emailVerified) {
-        toast.show('Your Google email is not verified.', 'error')
-        return
-      }
-      // For login we synthesize a demo user via activateStudentAccount's path
-      // only when a pending registration exists. For a plain login demo we
-      // create a minimal activated student in storage.
-      const demoUser = {
-        id: 'demo-student',
-        role: 'STUDENT' as const,
-        firstName: 'John',
-        lastName: 'Doe',
-        email: result.email,
-        phoneE164: '+17135551234',
-        activated: true
-      }
-      window.localStorage.setItem('hmb.mock.user', JSON.stringify(demoUser))
-      await refresh()
-      navigate('/student/dashboard', { replace: true })
-    } catch (err) {
-      toast.show(err instanceof Error ? err.message : 'Sign-in failed.', 'error')
-    } finally {
-      setLoading(false)
+  async function handleGoogle(which: 'login' | 'signup') {
+    if (busy) return
+    // Real Google sign-in through Amazon Cognito. The browser leaves for
+    // Cognito → Google and comes back to /auth/callback.
+    const result = which === 'login' ? await start(returnTo) : await signup.start()
+    if (!result) return // a redirect is already starting
+    if (result.status === 'already-signed-in') {
+      navigate(routeForAccount(result.account, returnTo), { replace: true })
+    } else if (result.status === 'error') {
+      toast.show(result.error.message, 'error')
     }
   }
 
@@ -60,17 +51,23 @@ export function LoginPage() {
             variant="outline"
             size="lg"
             className="w-full justify-center bg-card"
-            onClick={handleGoogle}
-            loading={loading}
+            onClick={() => handleGoogle('login')}
+            loading={redirecting}
+            disabled={signup.redirecting}
           >
             <GoogleIcon />
             <span className="font-semibold">Continue with Google</span>
           </Button>
           <p className="text-sm text-muted-foreground">
             Don’t have an account?{' '}
-            <Link to="/signup" className="text-primary font-semibold hover:underline">
+            <button
+              type="button"
+              onClick={() => handleGoogle('signup')}
+              disabled={busy}
+              className="text-primary font-semibold hover:underline disabled:opacity-60"
+            >
               Sign Up
-            </Link>
+            </button>
           </p>
         </div>
       </div>

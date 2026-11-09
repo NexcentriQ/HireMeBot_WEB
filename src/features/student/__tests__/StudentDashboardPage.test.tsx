@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest'
+import { setFakeCognitoUser } from '@/test/fakeAmplifyAuth'
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StudentDashboardPage } from '../pages/StudentDashboardPage'
@@ -7,18 +8,13 @@ import { MOCK_DASHBOARD } from '../data/mockApplications'
 import { studentService } from '../data/studentService'
 
 function seedUser() {
-  window.localStorage.setItem(
-    'hmb.mock.user',
-    JSON.stringify({
-      id: 'u1',
-      role: 'STUDENT',
-      firstName: 'John',
-      lastName: 'Doe',
-      email: 'john.doe@example.com',
-      phoneE164: '+17135551234',
-      activated: true
-    })
-  )
+  setFakeCognitoUser({
+    sub: 'u1',
+    givenName: 'John',
+    familyName: 'Doe',
+    email: 'john.doe@example.com',
+    emailVerified: true
+  })
 }
 
 describe('StudentDashboardPage', () => {

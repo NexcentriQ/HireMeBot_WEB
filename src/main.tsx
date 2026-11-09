@@ -5,8 +5,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { App } from '@/app/App'
 import { ThemeProvider } from '@/app/ThemeProvider'
 import { AuthProvider } from '@/features/auth/AuthProvider'
+import { initializeAuth } from '@/features/auth/amplifyConfig'
 import { ToastProvider } from '@/components/common/ToastProvider'
 import './styles/globals.css'
+
+// Configure Amplify once, before any component touches auth. On the OAuth
+// callback URL this also starts the authorization-code exchange.
+initializeAuth()
 
 const queryClient = new QueryClient({
   defaultOptions: {
