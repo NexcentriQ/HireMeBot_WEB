@@ -17,7 +17,6 @@ export type StudentApiMode = 'mock' | 'live'
 export type AppEnv = {
   STUDENT_API_MODE: StudentApiMode
   API_BASE_URL: string | undefined
-  DEV_STUDENT_ID: string | undefined
 }
 
 function readMode(raw: string | undefined): StudentApiMode {
@@ -39,8 +38,7 @@ function readString(raw: string | undefined): string | undefined {
 export function env(): AppEnv {
   return {
     STUDENT_API_MODE: readMode(import.meta.env.VITE_STUDENT_API_MODE as string | undefined),
-    API_BASE_URL: readString(import.meta.env.VITE_API_BASE_URL as string | undefined),
-    DEV_STUDENT_ID: readString(import.meta.env.VITE_DEV_STUDENT_ID as string | undefined)
+    API_BASE_URL: readString(import.meta.env.VITE_API_BASE_URL as string | undefined)
   }
 }
 
@@ -154,27 +152,12 @@ export function accountApiEnv(): AccountApiEnv {
 }
 
 /**
- * Thrown when the frontend is configured for live mode but a required env
- * var is missing. Surfaces a clear developer message in the UI's error
- * boundary instead of a silent 404 / CORS mystery.
- */
-export class MissingEnvError extends Error {
-  constructor(missing: string[]) {
-    super(
-      `Missing required environment variables for VITE_STUDENT_API_MODE=live: ${missing.join(
-        ', '
-      )}. Set them in .env.local (see .env.example).`
-    )
-    this.name = 'MissingEnvError'
-  }
-}
-
-/**
  * Thrown when a production build is configured for live mode. Live mode
- * today authenticates with the dev-only `X-Dev-Student-Id` header; shipping
- * that to a public deployment would allow any browser to impersonate any
- * student. Until Cognito/JWT replaces the header, live mode is restricted
- * to local development (import.meta.env.DEV).
+ * today authenticates with the dev-only `X-Dev-Student-Id` header (the
+ * signed-in student's `studentId`); shipping that to a public deployment
+ * would allow any browser to impersonate any student. Until the dashboard
+ * API accepts the Cognito Bearer token, live mode is restricted to local
+ * development (import.meta.env.DEV).
  */
 export class InsecureLiveModeError extends Error {
   constructor() {
@@ -189,30 +172,27 @@ export class InsecureLiveModeError extends Error {
 }
 
 /**
- * Call before issuing a live request. Throws MissingEnvError with the
- * concrete list of truly-required missing vars.
+ * Call before issuing a live request. Refuses live mode in a production
+ * build and returns the API base URL.
  *
  * `apiBaseUrl` is intentionally optional: when unset the frontend uses
  * same-origin relative URLs (and the Vite dev proxy forwards /api to the
  * backend during development). Set `VITE_API_BASE_URL` only when the UI is
  * served from a different origin than the API.
+ *
+ * The student id is NOT configuration: it comes from the signed-in student's
+ * account (`GET /auth/me`) and is passed to each request by the caller.
  */
-export function assertLiveEnv(): { apiBaseUrl: string; devStudentId: string } {
+export function assertLiveEnv(): { apiBaseUrl: string } {
   const current = env()
   if (current.STUDENT_API_MODE !== 'live') {
-    // Mock mode shouldn't be invoking live requests — return empty values;
+    // Mock mode shouldn't be invoking live requests — return an empty value;
     // callers (currently only `studentHttpGet`) guard this upstream.
-    return { apiBaseUrl: '', devStudentId: '' }
+    return { apiBaseUrl: '' }
   }
   // Hard refuse to run live mode in a production build. See InsecureLiveModeError.
   if (!import.meta.env.DEV) {
     throw new InsecureLiveModeError()
   }
-  const missing: string[] = []
-  if (!current.DEV_STUDENT_ID) missing.push('VITE_DEV_STUDENT_ID')
-  if (missing.length > 0) throw new MissingEnvError(missing)
-  return {
-    apiBaseUrl: current.API_BASE_URL ?? '', // empty → same-origin (dev proxy)
-    devStudentId: current.DEV_STUDENT_ID as string
-  }
+  return { apiBaseUrl: current.API_BASE_URL ?? '' } // empty → same-origin (dev proxy)
 }

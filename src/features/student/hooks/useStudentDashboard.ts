@@ -1,18 +1,17 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { studentService } from '../data/studentService'
 import type { DashboardResponse } from '../data/apiTypes'
-import { env } from '@/lib/env'
+import { useAuth } from '@/features/auth/AuthProvider'
+import { studentIdFromAccount } from '@/features/auth/account'
 
 /**
  * Stable TanStack Query key for the single dashboard response. Keyed by the
- * resolved student identity so switching students (or logging out and back
- * in as a different student) does not reuse the prior cache.
- *
- * In the current build the dev student id comes from env; when Cognito/JWT
- * replaces it, this becomes the authenticated user's id.
+ * signed-in student's backend `studentId` (from `GET /auth/me`), so switching
+ * students (or logging out and back in as a different student) never reuses
+ * the prior student's cache.
  */
 export function studentDashboardKey(studentId?: string | number) {
-  return ['student-dashboard', String(studentId ?? env().DEV_STUDENT_ID ?? 'unknown')] as const
+  return ['student-dashboard', String(studentId ?? 'unknown')] as const
 }
 
 const ONE_HOUR_MS = 60 * 60 * 1000
@@ -22,6 +21,11 @@ const TWO_HOURS_MS = 2 * ONE_HOUR_MS
  * Fetches the single dashboard payload. Backs the dashboard page, the
  * Today's Applications page, and the Application Details page from one
  * shared cache entry.
+ *
+ * The student id comes from the signed-in account (`useAuth().account`). The
+ * query stays disabled until it is known, so nothing is fetched (or cached)
+ * for an unidentified student. Route guards guarantee an ACTIVE account
+ * before any `/student/*` page renders.
  *
  * Cache policy:
  *   staleTime: 1 hour     — cached response is served fresh for an hour
@@ -36,9 +40,13 @@ const TWO_HOURS_MS = 2 * ONE_HOUR_MS
  *                                 explicitly by useReportingDateInvalidation.
  */
 export function useStudentDashboard(): UseQueryResult<DashboardResponse> {
+  const { account } = useAuth()
+  const studentId = studentIdFromAccount(account)
+
   return useQuery<DashboardResponse>({
-    queryKey: studentDashboardKey(),
-    queryFn: ({ signal }) => studentService.getDashboard({ signal }),
+    queryKey: studentDashboardKey(studentId),
+    queryFn: ({ signal }) => studentService.getDashboard({ signal, studentId }),
+    enabled: studentId !== undefined,
     staleTime: ONE_HOUR_MS,
     gcTime: TWO_HOURS_MS,
     refetchInterval: ONE_HOUR_MS,

@@ -10,7 +10,6 @@ describe('LiveStudentService / studentHttpGet', () => {
     vi.resetModules()
     vi.stubEnv('VITE_STUDENT_API_MODE', 'live')
     vi.stubEnv('VITE_API_BASE_URL', 'http://127.0.0.1:3000')
-    vi.stubEnv('VITE_DEV_STUDENT_ID', '1000000002')
   })
   afterEach(() => {
     vi.unstubAllEnvs()
@@ -69,7 +68,7 @@ describe('LiveStudentService / studentHttpGet', () => {
 
     const { LiveStudentService } = await import('../studentService')
     const svc = new LiveStudentService()
-    await svc.getDashboard()
+    await svc.getDashboard({ studentId: 1000000002 })
 
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     const [calledUrl, init] = fetchSpy.mock.calls[0]!
@@ -77,8 +76,34 @@ describe('LiveStudentService / studentHttpGet', () => {
     expect(url).toBe('http://127.0.0.1:3000/api/v1/student/applications')
     expect(url.includes('?')).toBe(false)
     const headers = new Headers(init!.headers as HeadersInit)
+    // The header carries the studentId passed by the caller (the signed-in
+    // student's account), not a value from the environment.
     expect(headers.get('X-Dev-Student-Id')).toBe('1000000002')
     expect(init!.method).toBe('GET')
+  })
+
+  it('sends the studentId it is given, whatever the environment says', async () => {
+    vi.stubEnv('VITE_DEV_STUDENT_ID', '999') // legacy variable must have no effect
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+
+    const { LiveStudentService } = await import('../studentService')
+    await new LiveStudentService().getDashboard({ studentId: 1000000007 })
+
+    const headers = new Headers(fetchSpy.mock.calls[0]![1]!.headers as HeadersInit)
+    expect(headers.get('X-Dev-Student-Id')).toBe('1000000007')
+  })
+
+  it('refuses to call the backend without a student id', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    const { LiveStudentService } = await import('../studentService')
+    await expect(new LiveStudentService().getDashboard()).rejects.toThrow(/student id is required/i)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -114,7 +139,7 @@ describe('LiveStudentService / studentHttpGet', () => {
       )
 
       const { LiveStudentService } = await import('../studentService')
-      const result = await new LiveStudentService().getDashboard()
+      const result = await new LiveStudentService().getDashboard({ studentId: 1000000002 })
 
       expect(result.student).toEqual(student)
       // Exactly one request, to the existing dashboard endpoint — never a profile endpoint.
@@ -144,7 +169,7 @@ describe('LiveStudentService / studentHttpGet', () => {
     let resolved: unknown
     let caught: unknown
     try {
-      resolved = await studentService.getDashboard()
+      resolved = await studentService.getDashboard({ studentId: 1000000002 })
     } catch (e) {
       caught = e
     }
@@ -170,7 +195,7 @@ describe('LiveStudentService / studentHttpGet', () => {
     const svc = new LiveStudentService()
     let caught: unknown
     try {
-      await svc.getDashboard()
+      await svc.getDashboard({ studentId: 1000000002 })
     } catch (e) {
       caught = e
     }
@@ -187,7 +212,7 @@ describe('LiveStudentService / studentHttpGet', () => {
     const svc = new LiveStudentService()
     let caught: unknown
     try {
-      await svc.getDashboard()
+      await svc.getDashboard({ studentId: 1000000002 })
     } catch (e) {
       caught = e
     }

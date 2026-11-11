@@ -36,7 +36,6 @@ beforeEach(() => {
   // Must happen BEFORE the test imports touch `env()` for the first time.
   vi.stubEnv('VITE_STUDENT_API_MODE', 'mock')
   vi.stubEnv('VITE_API_BASE_URL', '')
-  vi.stubEnv('VITE_DEV_STUDENT_ID', '1000000002')
 
   // Deterministic Cognito config matching jsdom's default origin
   // (http://localhost:3000) so redirect-origin checks pass by default.

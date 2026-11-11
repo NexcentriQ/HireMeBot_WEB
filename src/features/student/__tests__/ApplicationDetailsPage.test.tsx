@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -8,12 +8,15 @@ import { ApplicationDetailsPage } from '../pages/ApplicationDetailsPage'
 import { studentDashboardKey } from '../hooks/useStudentDashboard'
 import { MOCK_DASHBOARD } from '../data/mockApplications'
 import { studentService } from '../data/studentService'
+import { seedMockAuthUser } from '@/test/dashboardFixtures'
+import { FAKE_STUDENT_ID } from '@/test/fakeStudentAccountApi'
 
 function renderAt(path: string, opts: { seedCache?: boolean; client?: QueryClient } = {}) {
   const client =
     opts.client ?? new QueryClient({ defaultOptions: { queries: { retry: false } } })
   if (opts.seedCache) {
-    client.setQueryData(studentDashboardKey(), MOCK_DASHBOARD)
+    // Seed under the signed-in student's key (the fake backend's studentId).
+    client.setQueryData(studentDashboardKey(FAKE_STUDENT_ID), MOCK_DASHBOARD)
   }
   return {
     client,
@@ -38,6 +41,9 @@ function renderAt(path: string, opts: { seedCache?: boolean; client?: QueryClien
 }
 
 describe('ApplicationDetailsPage', () => {
+  beforeEach(() => {
+    seedMockAuthUser() // the dashboard query is keyed by the signed-in student
+  })
   afterEach(() => {
     vi.restoreAllMocks()
   })

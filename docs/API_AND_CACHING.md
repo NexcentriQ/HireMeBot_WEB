@@ -4,8 +4,16 @@ Reference for how the student frontend talks to `StudentLambda` and how
 responses are cached. Describes only what is actually implemented in the
 codebase; anything not implemented is called out explicitly.
 
-- Backend contract: [`API.md`](../API.md) (version dated 2026-10-29, plus the
-  `data.student` profile object — see "Student profile" below)
+This document covers the **student dashboard data** call and its cache. The
+sign-in / account calls (`GET /api/v1/auth/me`, `POST /api/v1/students/register`)
+are a separate client with Bearer-token auth; see
+[`COGNITO_GOOGLE_AUTH.md`](COGNITO_GOOGLE_AUTH.md) and
+[`BACKEND.md`](BACKEND.md). The dashboard call depends on them for one thing:
+the signed-in student's `studentId` (see "Where the student id comes from").
+
+- Backend contract: `API.md` (version dated 2026-10-29, plus the
+  `data.student` profile object — see "Student profile" below). The file is
+  not included in this repository.
 - Data-fetching library: [TanStack Query v5](https://tanstack.com/query/v5)
 - HTTP layer: hand-rolled `fetch` wrapper, no axios
 
@@ -13,9 +21,9 @@ codebase; anything not implemented is called out explicitly.
 
 ## 1. Backend API calls
 
-### Where the GET is actually issued
+### Where the dashboard GET is actually issued
 
-Only one place in the code calls the backend:
+Only one place in the code requests dashboard data from the backend:
 
 - **`LiveStudentService.getDashboard`** in
   [`src/features/student/data/studentService.ts`](../src/features/student/data/studentService.ts)
@@ -28,6 +36,28 @@ Only one place in the code calls the backend:
   It passes **no query params**, matching `API.md`'s hard rejection of
   `date`, `page`, `size`, `week`, `month`.
 
+### Where the student id comes from
+
+The signed-in student's id is **not** configuration. It flows like this:
+
+1. After Google sign-in, `AuthProvider` calls `GET /api/v1/auth/me` (or
+   `POST /api/v1/students/register` for a new student). For a registered,
+   ACTIVE student the response carries `studentId` (and `userId`), which is
+   kept in memory as `useAuth().account.student`.
+2. [`studentIdFromAccount()`](../src/features/auth/account.ts) returns that
+   `studentId` only when `account.status === 'active'` and it is a finite
+   number; otherwise `undefined`.
+3. [`useStudentDashboard()`](../src/features/student/hooks/useStudentDashboard.ts)
+   uses it for the cache key **and** passes it to
+   `studentService.getDashboard({ signal, studentId })`. While it is
+   `undefined` the query is `enabled: false`: nothing is fetched or cached.
+4. `studentHttpGet` sends it as `X-Dev-Student-Id`.
+
+Route guards guarantee an ACTIVE account (so the id exists) before any
+`/student/*` page renders. The account is held in memory only and re-read on
+every app start, so a page refresh restores the id from `GET /auth/me` before
+the dashboard query runs.
+
 ### The HTTP wrapper
 
 - **`studentHttpGet<T>(path, opts)`** in
@@ -39,8 +69,16 @@ Only one place in the code calls the backend:
     in [`vite.config.ts`](../vite.config.ts) `server.proxy['/api']`)
     forwards to `http://127.0.0.1:3000`.
   - Headers: `Accept: application/json`,
-    `X-Dev-Student-Id: <env.DEV_STUDENT_ID>`.
-  - `credentials: 'omit'` — dev auth is header-based.
+    `X-Dev-Student-Id: <studentId>` — the signed-in student's `studentId`
+    from `GET /auth/me` (`useAuth().account.student.studentId`), passed
+    in by the caller. It is **not** read from `.env.local`; the old
+    `VITE_DEV_STUDENT_ID` variable no longer exists. The helper throws
+    before calling `fetch` if no `studentId` is supplied.
+  - `credentials: 'omit'` — dev auth is header-based. No `Authorization`
+    header yet: the dashboard backend does not validate the Cognito token.
+    Switching is a change inside this helper (add
+    `Authorization: Bearer ${await getAccessToken()}`, drop the dev header);
+    the cache key can stay scoped by `studentId`.
   - `signal` is the `AbortSignal` TanStack Query supplies, so a navigation
     away cancels the in-flight fetch.
   - On a 2xx with `{ success: true, data: T }` → returns `data`.
@@ -51,12 +89,15 @@ Only one place in the code calls the backend:
 
 ### Request flow from React to the backend
 
-A component mounts → calls `useStudentDashboard()` → TanStack Query decides
-whether to run the `queryFn` → if yes, `queryFn` calls
-`studentService.getDashboard(signal)` → the service factory `pickImpl()`
-picks `LiveStudentService` based on `env().STUDENT_API_MODE` →
-`LiveStudentService.getDashboard` calls `studentHttpGet` → `fetch` → Vite
-proxy → StudentLambda. Nothing else touches the backend.
+A component mounts → calls `useStudentDashboard()` → the hook reads the
+signed-in student's `studentId` from `useAuth().account` → TanStack Query
+decides whether to run the `queryFn` (it is disabled until the id is known) →
+if yes, `queryFn` calls `studentService.getDashboard({ signal, studentId })` →
+the service factory `pickImpl()` picks `LiveStudentService` based on
+`env().STUDENT_API_MODE` → `LiveStudentService.getDashboard` calls
+`studentHttpGet` → `fetch` with `X-Dev-Student-Id` → Vite proxy →
+StudentLambda. Nothing else requests dashboard data from the backend.
+(`MockStudentService` ignores `studentId`.)
 
 ### Loading / error states
 
@@ -125,10 +166,13 @@ immediately — reporting-date rollover is still handled explicitly, see
 
 ```ts
 // studentDashboardKey() in useStudentDashboard.ts
-['student-dashboard', String(studentId ?? env().DEV_STUDENT_ID ?? 'unknown')]
+['student-dashboard', String(studentId ?? 'unknown')]
 ```
 
-So in a typical dev session the key is literally
+`studentId` is the signed-in student's backend id
+(`useAuth().account.student.studentId`, only for an `active` account). The
+query is `enabled` only once it is known, so nothing is fetched or cached under
+`'unknown'` in the running app. For student 1000000002 the key is literally
 `['student-dashboard', '1000000002']`.
 
 ### Hit vs. miss
@@ -185,9 +229,12 @@ How it is consumed:
   details are unavailable" with Retry, the greeting stays neutral, and the
   rest of the dashboard keeps working. In development the field **names**
   (never values) are logged with `console.error`.
-- Identity shown in the UI comes **only** from `data.student`. The Cognito
-  auth session (`useAuth().user`) is used for route access and sign-out
-  only; it is never read for names, email, phone or verification.
+- Identity **shown** in the UI comes **only** from `data.student`. The
+  Cognito identity (`useAuth().user`) is used for route access and sign-out;
+  it is never read for names, email, phone or verification. The backend
+  account (`useAuth().account`) is used for routing and for one value: the
+  `studentId` that scopes the dashboard request and its cache key. Its other
+  fields (name, email, phone) are not rendered.
 
 Display rules:
 
@@ -283,31 +330,44 @@ is immediate, since the layout is still mounted). Verified by the
 test in
 [`reportingDate.test.tsx`](../src/features/student/lib/__tests__/reportingDate.test.tsx).
 
-### Logout
+### Logout, identity change and session errors
 
-[`src/features/auth/AuthProvider.tsx`](../src/features/auth/AuthProvider.tsx)
-in `logout`:
+[`AuthProvider.tsx`](../src/features/auth/AuthProvider.tsx) owns the cache
+clearing through one helper:
 
 ```ts
-await authService.logout()
-setUserState(null)
-queryClient.removeQueries({ queryKey: ['student-dashboard'] })
+const dropStudentCache = useCallback(() => {
+  // A different (or no) identity must never read a prior student's cache.
+  queryClient.removeQueries({ queryKey: ['student-dashboard'] })
+}, [queryClient])
 ```
 
-`removeQueries` with a prefix wipes **every**
-`['student-dashboard', *]` entry, so the next student who signs in on the
-same device cannot read the prior student's data. Verified by
-[`AuthProvider.cacheIsolation.test.tsx`](../src/features/auth/__tests__/AuthProvider.cacheIsolation.test.tsx).
+`clearSessionState()` (state → signed out, then `dropStudentCache()`) runs on
+`logout()`, on the Amplify `signedOut` event, and when the backend rejects the
+session with a 401 (`endRejectedSession`). `dropStudentCache()` is also called
+when a session check fails, when the session turns out to be gone, and when a
+re-check returns a **different** Cognito user than before.
+
+`logout()` also clears the signup draft and redirect intent, then calls
+Amplify's `signOut()`. `removeQueries` with a prefix wipes **every**
+`['student-dashboard', *]` entry, so the next student who signs in on the same
+device cannot read the prior student's data. Verified by
+[`AuthProvider.cacheIsolation.test.tsx`](../src/features/auth/__tests__/AuthProvider.cacheIsolation.test.tsx)
+and the "logout clears the cached student data" test in
+[`StudentProfileCaching.test.tsx`](../src/features/student/__tests__/StudentProfileCaching.test.tsx).
+
+Cache isolation therefore has two layers: the key is scoped by `studentId`,
+and the whole prefix is removed whenever the identity changes or ends.
 
 ### Recruiter creates a new application while the student's cache is still fresh
 
 **The frontend does not know and will not show it until the cache is
-invalidated or the user hits Refresh.** There is no polling, no WebSocket,
-no SSE, no `refetchInterval`, and no backend push mechanism in the
-project. Exactly as documented in the plan under "Not implemented". The
-recruiter can POST 20 new applications and the student's dashboard will
-keep showing the stale values until one of: midnight rollover, 1-hour
-staleness + an observer mount, the Refresh button, or a reload.
+invalidated or the user hits Refresh.** There is no WebSocket, no SSE and no
+backend push mechanism in the project; the only automatic refresh is the
+hourly `refetchInterval` (visible tab only). The recruiter can POST 20 new
+applications and the student's dashboard will keep showing the stale values
+until one of: the next hourly refetch, midnight rollover, 1-hour staleness + an
+observer mount, the Refresh button, or a reload.
 
 ---
 
@@ -444,8 +504,9 @@ UI component mounts
    │  useStudentDashboard()
    ▼
 useQuery({
-   queryKey: ['student-dashboard', '1000000002'],
-   queryFn:  () => studentService.getDashboard({ signal }),
+   queryKey: ['student-dashboard', '1000000002'],   // studentId from GET /auth/me
+   enabled:  studentId !== undefined,
+   queryFn:  () => studentService.getDashboard({ signal, studentId }),
    staleTime: 1h,  gcTime: 2h,  refetchOnWindowFocus: false
 })
    │
@@ -461,7 +522,7 @@ useQuery({
            → run queryFn (one Lambda call), then populate cache
                 │
                 ▼
-       studentService.getDashboard(signal)
+       studentService.getDashboard({ signal, studentId })
                 │
                 ▼
        pickImpl()  — reads env().STUDENT_API_MODE
@@ -477,7 +538,7 @@ useQuery({
                      fetch(url, {
                         method: 'GET',
                         headers: { Accept: 'application/json',
-                                   'X-Dev-Student-Id': '1000000002' },
+                                   'X-Dev-Student-Id': String(studentId) },
                         credentials: 'omit',
                         signal
                      })
@@ -500,25 +561,26 @@ useQuery({
 |---|---|---|---|
 | 1 | First page load (cache empty) | **Yes — 1** | `useStudentDashboard` miss → `queryFn` |
 | 2 | Navigating Dashboard → Applications → Profile → Dashboard within the hour | **No** | shared cache hit on key `['student-dashboard', studentId]` |
-| 3 | Clicking Prev or Next on Today's Applications | **No** | `setPageNum` state only; renders `data.pages[String(pageNum)]` |
+| 3 | Clicking Prev or Next on Today's Applications | **No** | `setPageNum` state only; slices the locally filtered, flattened list |
 | 4 | Clicking a card → Application Details | **No** | details page reads from the shared cache |
-| 5 | Hard-refresh a details URL in a new tab | **Yes — 1** | fresh `QueryClient`, cold cache; details page triggers one dashboard fetch |
+| 5 | Hard-refresh a details URL (same tab) | **Yes — 1** | fresh `QueryClient`, cold cache; details page triggers one dashboard fetch. (A *new* tab has no `sessionStorage` session, so it goes to `/login` first.) |
 | 6 | Clicking the header Refresh button | **Yes — 1** | `refetch()` call (ignores `staleTime`) |
-| 7 | Searching within Today's Applications | **No** | filters `currentPageItems` locally |
-| 8 | Browser refresh / page reload | **Yes — 1** | in-memory cache lost; first observer mount re-fetches |
-| 9 | Close tab, reopen later same day | **Yes — 1** | no persistence; same as reload |
+| 7 | Searching within Today's Applications | **No** | filters the flattened list of all pages locally |
+| 8 | Browser refresh / page reload | **Yes — 1** (plus `GET /auth/me`) | in-memory cache and account lost; `/auth/me` restores `studentId`, then the first observer re-fetches the dashboard |
+| 9 | Close tab, reopen later same day | **Yes — 1** (after signing in again) | no persistence; Cognito tokens in `sessionStorage` are gone too, so Continue with Google is needed first |
 | 10 | Opening the app at 11:59 PM, still open at 12:01 AM (CT) | **Yes — 1** | `useReportingDateInvalidation` timer fires at midnight → `invalidateQueries` → observer still mounted re-fetches |
 | 11 | Laptop asleep past midnight, user clicks back in at 7 AM | **Yes — 1** | `focus`/`visibilitychange` listener compares `currentDateInZone(tz)` to cached `data.date`, invalidates on mismatch |
-| 12 | Recruiter creates new applications mid-session | **No** (until one of #6, #8, #10, #11, or stale + new mount) | no polling / push |
-| 13 | Student logs out and signs back in as same student | **Yes — 1** | `removeQueries(['student-dashboard'])` on logout clears cache |
-| 14 | Student A logs out, Student B logs in on same device | **Yes — 1** (for Student B) | same cache removal, new fetch with Student B's id |
+| 12 | Recruiter creates new applications mid-session | **No** (until the hourly refetch or one of #6, #8, #10, #11, or stale + new mount) | no push; only the hourly `refetchInterval` |
+| 13 | Student logs out and signs back in as same student | **Yes — 1** | `removeQueries(['student-dashboard'])` in `clearSessionState()` on logout clears cache |
+| 14 | Student A logs out, Student B logs in on same device | **Yes — 1** (for Student B) | same cache removal; new fetch with Student B's `studentId` from `/auth/me` |
 | 15 | API returns 503 / network error | **Yes** (one call that fails) + possibly one retry (`retry: 1` default) | `isError` → red card with Retry button; **no mock fallback** |
 | 16 | Clicking Retry after an error | **Yes — 1** | `refetch()` |
 | 17 | Visiting Notifications / Profile only | **No** | `useStudentDashboard` is also mounted at `StudentLayout`, so the first entry into `/student` does trigger scenario #1, but staying inside the student shell afterward does not add any calls |
 | 18 | `VITE_STUDENT_API_MODE=mock` (default) | **No** | `MockStudentService` returns in-process `MOCK_DASHBOARD` |
 | 19 | Dashboard → Profile (or opening the Profile page while the dashboard cache is fresh) | **No** | `useStudentProfile` is a selector over the shared dashboard query; `data.student` is already cached |
 | 20 | Hard-refresh / deep link straight to `/student/profile` | **Yes — 1** | cold cache; the one dashboard fetch also carries `data.student` |
-| 21 | Student switch on the same device | **Yes — 1** (for the new student) | cache is keyed per student and cleared on logout, so the previous profile is never shown |
+| 21 | Student switch on the same device | **Yes — 1** (for the new student) | cache is keyed per `studentId` and cleared on logout / identity change, so the previous profile is never shown |
+| 22 | A dashboard page renders before the account is known (no `studentId` yet) | **No** | the query is `enabled: false` until `studentIdFromAccount(account)` returns an id; guards normally prevent this |
 
 ### What is **not** implemented (so you don't over-estimate the cost)
 
@@ -526,8 +588,9 @@ useQuery({
 - No WebSocket / SSE / push to notify the student of recruiter-created rows.
 - No shared SW cache for `/api/*` responses — explicitly denylisted AND
   pinned to a `NetworkOnly` runtime caching rule (defense in depth).
-- No multi-student concurrency: `env().DEV_STUDENT_ID` is a single string
-  from `.env.local` until Cognito replaces it.
+- No Bearer token on the dashboard call yet: the signed-in student's
+  `studentId` is sent in the dev-only `X-Dev-Student-Id` header until the
+  dashboard backend accepts the Cognito access token.
 - Live mode is intentionally blocked at build-time AND run-time in a
   production bundle until the dev-only `X-Dev-Student-Id` header is
   replaced by Cognito/JWT.

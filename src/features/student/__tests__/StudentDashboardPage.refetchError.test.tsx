@@ -10,6 +10,7 @@ import { StudentDashboardPage } from '../pages/StudentDashboardPage'
 import { studentDashboardKey } from '../hooks/useStudentDashboard'
 import { MOCK_DASHBOARD } from '../data/mockApplications'
 import { studentService } from '../data/studentService'
+import { FAKE_STUDENT_ID } from '@/test/fakeStudentAccountApi'
 
 function seedUser() {
   setFakeCognitoUser({
@@ -38,7 +39,7 @@ describe('StudentDashboardPage — refetch-error banner', () => {
     // Pre-seed the cache with the last successful dashboard, then make the
     // next service call reject to simulate a failed background refetch.
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    client.setQueryData(studentDashboardKey(), MOCK_DASHBOARD)
+    client.setQueryData(studentDashboardKey(FAKE_STUDENT_ID), MOCK_DASHBOARD)
     const spy = vi
       .spyOn(studentService, 'getDashboard')
       .mockRejectedValue(new Error('Boom from the backend'))

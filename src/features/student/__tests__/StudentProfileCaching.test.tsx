@@ -10,6 +10,7 @@ import { App } from '@/app/App'
 import { studentService } from '../data/studentService'
 import { studentDashboardKey } from '../hooks/useStudentDashboard'
 import { dashboardFor, seedMockAuthUser } from '@/test/dashboardFixtures'
+import { FAKE_STUDENT_ID } from '@/test/fakeStudentAccountApi'
 import type { DashboardResponse } from '../data/apiTypes'
 
 function renderApp(route: string, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
@@ -92,12 +93,12 @@ describe('student profile shares the dashboard cache', () => {
     const { client } = renderApp('/student/profile')
 
     expect(await screen.findByRole('heading', { name: 'Sarah Johnson' })).toBeInTheDocument()
-    expect(client.getQueryData(studentDashboardKey())).toBeDefined()
+    expect(client.getQueryData(studentDashboardKey(FAKE_STUDENT_ID))).toBeDefined()
 
     await user.click(screen.getByRole('button', { name: /sign out/i }))
 
     expect(await screen.findByRole('button', { name: /continue with google/i })).toBeInTheDocument()
-    expect(client.getQueryData(studentDashboardKey())).toBeUndefined()
+    expect(client.getQueryData(studentDashboardKey(FAKE_STUDENT_ID))).toBeUndefined()
     expect(screen.queryByText(/Sarah/)).not.toBeInTheDocument()
   })
 
@@ -109,8 +110,8 @@ describe('student profile shares the dashboard cache', () => {
       dashboardFor({ firstName: 'Alice', lastName: 'Anderson', email: 'alice@example.com' })
     )
 
-    // The app is now configured for student "B"; B's response is still in flight.
-    vi.stubEnv('VITE_DEV_STUDENT_ID', '1000000002')
+    // The signed-in student is now "B" (FAKE_STUDENT_ID, from GET /auth/me);
+    // B's response is still in flight.
     let resolveB!: (d: DashboardResponse) => void
     vi.spyOn(studentService, 'getDashboard').mockReturnValue(
       new Promise<DashboardResponse>((res) => {

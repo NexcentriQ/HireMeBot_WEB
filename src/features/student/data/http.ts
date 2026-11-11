@@ -30,17 +30,25 @@ export class ApiError extends Error {
 
 type HttpOptions = {
   signal?: AbortSignal
+  /** Backend `studentId` of the signed-in student (from `GET /auth/me`). Required. */
+  studentId?: number | string
 }
 
 /**
  * Student-authenticated GET helper. Builds the URL, attaches the dev
- * student header (until Cognito/JWT replaces it), unwraps the standard
+ * student header carrying the signed-in student's `studentId` (until the
+ * dashboard API accepts the Cognito Bearer token), unwraps the standard
  * `{ success, data }` envelope, and throws `ApiError` for anything else.
  *
  * Never retries. Never logs response bodies.
  */
 export async function studentHttpGet<T>(path: string, opts: HttpOptions = {}): Promise<T> {
-  const { apiBaseUrl, devStudentId } = assertLiveEnv()
+  const { apiBaseUrl } = assertLiveEnv()
+  const { studentId } = opts
+  if (studentId === undefined || studentId === '') {
+    // Programmer error (the UI only calls this for an active, signed-in student).
+    throw new Error('A signed-in student id is required to call the student API.')
+  }
   const url = joinUrl(apiBaseUrl, path)
 
   let res: Response
@@ -49,7 +57,7 @@ export async function studentHttpGet<T>(path: string, opts: HttpOptions = {}): P
       method: 'GET',
       headers: {
         Accept: 'application/json',
-        'X-Dev-Student-Id': devStudentId
+        'X-Dev-Student-Id': String(studentId)
       },
       // No credentials — dev auth is header-based; prod will use Authorization
       credentials: 'omit',

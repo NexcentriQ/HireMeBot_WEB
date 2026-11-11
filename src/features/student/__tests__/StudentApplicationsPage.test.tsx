@@ -1,12 +1,16 @@
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StudentApplicationsPage } from '../pages/StudentApplicationsPage'
 import { renderWithProviders } from '@/test/renderWithProviders'
 import { MOCK_DASHBOARD } from '../data/mockApplications'
 import { studentService } from '../data/studentService'
+import { seedMockAuthUser } from '@/test/dashboardFixtures'
 
 describe("StudentApplicationsPage (Today's Applications)", () => {
+  beforeEach(() => {
+    seedMockAuthUser() // the dashboard query waits for the signed-in student's id
+  })
   afterEach(() => {
     vi.restoreAllMocks()
   })

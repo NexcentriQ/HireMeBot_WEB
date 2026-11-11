@@ -51,11 +51,14 @@ function json(status: number, body: unknown): FakeResponse {
   return { status, body }
 }
 
+/** `studentId` the fake backend reports for every registered student. */
+export const FAKE_STUDENT_ID = 1000000000
+
 function studentPayload(sub: string, account: Extract<FakeAccount, { type: 'registered' }>) {
   const user = getFakeCognitoUser()
   return {
-    userId: 1000000000,
-    studentId: 1000000000,
+    userId: FAKE_STUDENT_ID,
+    studentId: FAKE_STUDENT_ID,
     firstName: account.firstName ?? user?.givenName ?? 'Alex',
     lastName: account.lastName ?? user?.familyName ?? 'Smith',
     email: user?.email ?? `${sub}@gmail.com`,

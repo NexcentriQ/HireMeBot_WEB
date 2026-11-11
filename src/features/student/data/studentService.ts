@@ -16,8 +16,14 @@ import { MOCK_DASHBOARD } from './mockApplications'
  * Implementation detail: the picker is lazy and re-evaluates on every call
  * so tests can switch modes with `vi.stubEnv` without reloading modules.
  */
+export type GetDashboardOptions = {
+  signal?: AbortSignal
+  /** Signed-in student's backend `studentId`. Required in live mode; ignored by the mock. */
+  studentId?: number | string
+}
+
 export interface StudentService {
-  getDashboard(opts?: { signal?: AbortSignal }): Promise<DashboardResponse>
+  getDashboard(opts?: GetDashboardOptions): Promise<DashboardResponse>
 }
 
 export class MockStudentService implements StudentService {
@@ -29,9 +35,9 @@ export class MockStudentService implements StudentService {
 }
 
 export class LiveStudentService implements StudentService {
-  async getDashboard(opts: { signal?: AbortSignal } = {}): Promise<DashboardResponse> {
+  async getDashboard(opts: GetDashboardOptions = {}): Promise<DashboardResponse> {
     // No query params — the backend always reports the current date and
-    // returns every page inline.
+    // returns every page inline. The student is identified by header only.
     return studentHttpGet<DashboardResponse>('/api/v1/student/applications', opts)
   }
 }

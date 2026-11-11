@@ -52,6 +52,17 @@ export function accountFromError(err: AccountApiError): AccountState {
   return { status: 'error', message: err.message, requestId: err.requestId }
 }
 
+/**
+ * The backend `studentId` of the signed-in, ACTIVE student (from
+ * `GET /auth/me` or registration), or `undefined` when there isn't one.
+ * Student API calls and their cache keys are scoped by this id.
+ */
+export function studentIdFromAccount(account: AccountState): number | undefined {
+  if (account.status !== 'active') return undefined
+  const { studentId } = account.student
+  return Number.isFinite(studentId) ? studentId : undefined
+}
+
 export const DASHBOARD_PATH = '/student/dashboard'
 export const SIGNUP_PATH = '/signup'
 export const ACCOUNT_STATUS_PATH = '/account-status'

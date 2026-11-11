@@ -1,12 +1,19 @@
 # Amazon Cognito Google Sign-In — Integration & Findings
 
-**Status (2026-11-08):** Google sign-in through Amazon Cognito (AWS
+**Status (2026-11-11):** Google sign-in through Amazon Cognito (AWS
 Amplify v6) is integrated with the student account API
 (`GET /api/v1/auth/me`, `POST /api/v1/students/register`, see
-`STUDENT_AUTH_API.md`). Google comes first for everyone; the backend decides
-between the dashboard and the signup form. Phone OTP is still a
-**development-only simulation**. The backend endpoints are **not deployed**
-yet (tested locally against `sam local`); see [§F](#f-production-readiness).
+`STUDENT_AUTH_API.md`, which is not included in this repository). Google comes
+first for everyone; the backend decides between the dashboard and the signup
+form. Phone OTP is still a **development-only simulation**. The backend
+endpoints are **not deployed** yet (tested locally against `sam local`); see
+[§F](#f-production-readiness).
+
+The student **dashboard** API is not yet authenticated with the Cognito token.
+In live mode it receives the signed-in student's `studentId` (from
+`GET /auth/me`) in the dev-only `X-Dev-Student-Id` header; there is no student
+ID in `.env.local` any more. See
+[Dashboard identity](#dashboard-identity-and-where-state-lives).
 
 | | |
 |---|---|
@@ -26,6 +33,7 @@ yet (tested locally against `sam local`); see [§F](#f-production-readiness).
 - [B. Files changed](#b-files-changed)
 - [C. Implemented features](#c-implemented-features)
 - [D. Authentication flow](#d-authentication-flow)
+- [Dashboard identity and where state lives](#dashboard-identity-and-where-state-lives)
 - [Error handling](#error-handling)
 - [Security notes](#security-notes)
 - [E. Test results](#e-test-results)
@@ -38,7 +46,10 @@ yet (tested locally against `sam local`); see [§F](#f-production-readiness).
 
 ## A. Repository analysis
 
-Findings from inspecting the repository **before** any change.
+Findings from inspecting the repository **before** any change. *This section
+is a historical record of the starting point (2026-11-06). Several rows (8, 9,
+11, 12, 14) no longer describe the code; the sections from §B onward describe
+the current state.*
 
 | # | Area | Finding |
 |---|---|---|
@@ -82,7 +93,7 @@ Findings from inspecting the repository **before** any change.
 | Token storage: the prompt says let Amplify manage it; `docs/BACKEND.md` says never store JWTs in localStorage | Used Amplify's **supported `sessionStorage` adapter**. It satisfies both rules and survives page refresh. Trade-off: closing the tab or PWA window ends the session (see [Known limitations](#known-limitations)). Switching to Amplify's default (localStorage) is one line in `amplifyConfig.ts`. |
 | `Amplify.configure()` resets token storage to localStorage on every call | Token provider is configured first and passed via `libraryOptions.Auth.tokenProvider`, so the OAuth listener writes tokens to `sessionStorage` (verified in Amplify 6.22.2 source). |
 | Old mock services | `MockAuthService.ts` and `CognitoAuthService.ts` were **removed**. Their useful parts were refactored: OTP and throttle logic into `mockOtpService.ts`; the session boundary into `authService.ts`. |
-| Mock user had `role` / `activated` | Removed. Cognito issues no role claim, so the frontend no longer fabricates one. `RequireStudent` now requires a valid Cognito session and documents the backend integration point. |
+| Mock user had `role` / `activated` | Removed. Cognito issues no role claim, so the frontend no longer fabricates one. `RequireStudent` initially required a valid Cognito session; since the account API landed it requires `account.status === 'active'` from `GET /auth/me` (see §D). |
 | Success page text said "account has been successfully activated" | Changed to "You're signed in with Google and ready to start tracking your applications." No backend activation exists. Layout unchanged. |
 | Phone step in production | The OTP form is replaced by an explicit notice ("SMS verification isn't available yet… has not been verified") and a **Continue** button. The draft records `phoneStep: 'deferred'`. Google sign-in stays independently available. |
 | Amplify picks the redirect URL by hostname only (ignores the port) | Added an explicit **origin check** before redirecting. `localhost:4173` vs `localhost:5173` now shows an actionable configuration error instead of a broken round trip. |
@@ -106,6 +117,10 @@ Findings from inspecting the repository **before** any change.
 | `src/features/auth/services/phoneVerification.ts` | `PhoneVerificationService` selection: DEV mock vs production "unavailable" |
 | `src/features/auth/services/mockOtpService.ts` | Development-only OTP simulation (`123456`) |
 | ~~`src/features/auth/services/studentOnboardingApi.ts`~~ | Removed 2026-11-08: replaced by `studentAccountApi.ts` (real `GET /auth/me` + `POST /students/register`) |
+| `src/features/auth/services/studentAccountApi.ts` | Client for `GET /api/v1/auth/me` and `POST /api/v1/students/register`: Bearer access token per attempt, response parsing, error-code mapping, 503 backoff |
+| `src/features/auth/account.ts` | `AccountState` union, `routeForAccount()`, `studentIdFromAccount()` and the shared path constants |
+| `src/features/auth/pages/AccountStatusPage.tsx` | `/account-status`: pending, restricted and "couldn't load your account" screens |
+| `src/test/fakeStudentAccountApi.ts` | In-memory account API used by all tests (`FAKE_STUDENT_ID` is the `studentId` it reports) |
 | `src/features/auth/hooks/useGoogleSignIn.ts` | Shared Google button logic: double-click guard, bfcache reset, already-signed-in handling |
 | `src/test/fakeAmplifyAuth.ts` | In-memory `aws-amplify/auth` fake used by all tests |
 | `src/features/auth/__tests__/{authService,amplifyConfig,mockOtpService,onboardingDraft,AuthProvider,AuthCallbackPage,signupFlow}.test.*` | New tests (see §E) |
@@ -117,7 +132,7 @@ Findings from inspecting the repository **before** any change.
 | File | Change |
 |---|---|
 | `src/main.tsx` | Calls `initializeAuth()` once before rendering |
-| `src/features/auth/AuthProvider.tsx` | Cognito-backed state `{ user, isAuthenticated, isLoading, error }`, `loginWithGoogle`, `logout`, `refresh`. Hub sync, expiry re-check on tab focus |
+| `src/features/auth/AuthProvider.tsx` | Cognito-backed state `{ user, isAuthenticated, account, isLoading, error }`, `loginWithGoogle`, `logout`, `refresh`, `registerStudent`. Runs `GET /auth/me` on start and every sign-in; Hub sync; background re-check on tab focus; drops the student cache whenever the identity changes or ends |
 | `src/features/auth/types.ts` | `AuthUser` (Cognito `sub` based), error codes, `PhoneVerificationService` interface |
 | `src/features/auth/pages/SignupPage.tsx` | Writes the onboarding draft (no Cognito call), prefills when the user returns. **Markup unchanged** |
 | `src/features/auth/pages/VerifyPhonePage.tsx` | Uses `PhoneVerificationService`. Same OTP UI, countdown, and back link. Production "deferred" state |
@@ -125,13 +140,14 @@ Findings from inspecting the repository **before** any change.
 | `src/features/auth/pages/LoginPage.tsx` | Fake demo-user login **removed**. Real Cognito sign-in preserving the requested page |
 | `src/features/auth/pages/AuthCallbackPage.tsx` | Real OAuth completion, StrictMode-safe single redirect, error UI reused |
 | ~~`src/features/auth/pages/SignupSuccessPage.tsx`~~ | Removed 2026-11-08: registration now lands directly on the dashboard |
-| `src/routes/guards.tsx` | Cognito-session guards. `RequireActivatedUser` renamed to `RequireAuthenticatedUser`. `needsPhoneVerified` renamed to `needsPhoneStep` |
-| `src/app/App.tsx` | Guard renames only. No routes added or removed |
-| `src/lib/env.ts` | `cognitoEnv()` / `missingCognitoEnv()` |
+| `src/routes/guards.tsx` | Guards driven by `account.status` (`RequireStudent`, `RequireSignupForm`, `RequirePendingRegistration`, `RequireAccountStatus`, `RequireInterruptedSignup`, `GuestOnly`, `RootRedirect`). The original Cognito-session-only guards were replaced when the account API landed |
+| `src/app/App.tsx` | Routes for the account flow: `/connect-google`, `/account-status`, `/auth/callback` alongside `/login`, `/signup`, `/verify-phone` and `/student/*` |
+| `src/lib/env.ts` | `cognitoEnv()` / `missingCognitoEnv()`, `accountApiEnv()`. `DEV_STUDENT_ID` / `VITE_DEV_STUDENT_ID` removed 2026-11-11 (the student id now comes from the signed-in account) |
+| `src/features/student/data/http.ts`, `studentService.ts`, `src/features/student/hooks/useStudentDashboard.ts` | 2026-11-11: dashboard request and cache key use the signed-in student's `studentId` from `account.student`; the query is disabled until it is known |
 | `src/test/setup.ts` | Global Amplify fake, Cognito env stubs, `ResizeObserver` polyfill, sessionStorage reset |
 | `src/test/dashboardFixtures.ts`, `src/features/student/__tests__/{navigation,StudentDashboardPage,StudentDashboardPage.refetchError}.test.tsx`, `src/routes/__tests__/guards.test.tsx` | Seed the fake Cognito session instead of `hmb.mock.user` |
 | `package.json`, `package-lock.json` | `aws-amplify@^6.22.2` |
-| `.env.example` | Cognito placeholders + guidance |
+| `.env.example` | Cognito placeholders + guidance. `VITE_DEV_STUDENT_ID` removed 2026-11-11 (delete it from your `.env.local`; it is ignored) |
 | `.env.local` *(git-ignored, not committed)* | Appended the five `VITE_COGNITO_*` values. Existing variables untouched |
 | `README.md`, `docs/BACKEND.md`, `docs/API_AND_CACHING.md` | Removed statements that auth is a mock; link here |
 
@@ -139,9 +155,10 @@ Findings from inspecting the repository **before** any change.
 `src/features/auth/services/CognitoAuthService.ts`,
 `src/features/auth/__tests__/MockAuthService.test.ts`.
 
-**Untouched:** recruiter (none exist in this repo), student dashboard
-/ applications / profile / notifications pages, `http.ts` / student API,
-styling, PWA configuration, Java backend, MySQL schema.
+**Untouched by the original Cognito change:** recruiter (none exist in this
+repo), student dashboard / applications / profile / notifications pages,
+`http.ts` / student API (later changed to take the signed-in `studentId`, see
+above), styling, PWA configuration, Java backend, MySQL schema.
 
 ---
 
@@ -154,7 +171,11 @@ styling, PWA configuration, Java backend, MySQL schema.
 - OAuth callback handling at `/auth/callback`
 - Session restore on startup and refresh
 - Expiry handling: `tokenRefresh_failure` and a re-check when the tab regains focus
-- Protected `/student/*` routes, return to the originally requested page
+- Backend account lookup (`GET /auth/me`) and student registration
+  (`POST /students/register`) with the Cognito access token, routing by
+  account status (dashboard, signup form, pending, restricted, error)
+- Protected `/student/*` routes (active students only), return to the
+  originally requested page
 - Cognito sign-out from the existing profile "Sign out" button
 - User-safe error handling
 - Vercel SPA rewrite
@@ -168,7 +189,7 @@ styling, PWA configuration, Java backend, MySQL schema.
 **Deferred (not implemented, by decision)**
 
 - Real SMS OTP (Cognito SMS / Twilio / paid services / SMS sender registration)
-- Backend student onboarding/profile persistence and role checks
+- Server-side role checks and JWT validation on the student dashboard API
 - Phone-to-Google account linking
 - Production Cognito callback/sign-out URLs (the production URL is unknown)
 - AWS infrastructure changes of any kind
@@ -257,6 +278,67 @@ clears tokens and revokes the refresh token → browser goes to Cognito
 
 ---
 
+## Dashboard identity and where state lives
+
+### Who owns what
+
+| Concern | Owner |
+|---|---|
+| Exchange the OAuth code, store tokens, refresh them, revoke on sign-out | **Amplify** (library code) |
+| Tell Amplify to use `sessionStorage` (`amplifyConfig.ts`) | App code |
+| Read a token and send it as `Authorization: Bearer` (`studentAccountApi.ts`) | App code, per request, in a local variable |
+| Copy identity claims (`sub`, email, names; no tokens) into React state | `AuthProvider` |
+| React to Amplify `Hub` events (`signedIn`, `signedOut`, `tokenRefresh_failure`) | `AuthProvider` |
+
+Amplify's tokens (ID, access, refresh) live in `sessionStorage` under
+`CognitoIdentityServiceProvider.*`. They survive a refresh and vanish when the
+tab or window closes (a new tab has no session). App code never stores them in
+state, Context, the query cache or its own storage.
+
+### What is kept after sign-in or sign-up
+
+| Data | Where | Notes |
+|---|---|---|
+| `user` — `userId` (Cognito `sub`, a string), `username`, `email`, `emailVerified`, `givenName`, `familyName`, `identityProvider` | `AuthProvider` state (memory) | Claims only; display and routing |
+| `account` — `status` plus, for `active`/`pending`, `student` = `{ userId, studentId, firstName, lastName, email, phoneNumber, emailVerified, phoneVerified, accountStatus, accountType }` | `AuthProvider` state (memory) | The backend's answer from `GET /auth/me` or `POST /students/register`. **Never persisted**; re-derived on every app start, Google sign-in and tab refocus, so a suspension takes effect on the next lookup |
+| Dashboard response (stats, applications, `data.student`) | TanStack Query cache, `['student-dashboard', <studentId>]` | Memory only; see [`API_AND_CACHING.md`](API_AND_CACHING.md) |
+| Signup form draft, redirect intent | `sessionStorage` (`hmb.onboarding.draft`, `hmb.auth.redirectIntent`) | TTL 30 min / 15 min; no tokens |
+
+Do not confuse the two ids: `useAuth().user.userId` is the **Cognito `sub`**
+(string); `useAuth().account.student.userId` / `.studentId` are the **backend**
+numeric ids.
+
+After a page refresh the order is: Amplify finds the tokens →
+`getAuthenticatedUser()` rebuilds `user` → `GET /auth/me` rebuilds `account` →
+guards (which wait while `isLoading`) let an `active` student through → the
+dashboard query runs.
+
+### How the student API gets the student id
+
+The dashboard call needs to know which student it is for. Today:
+
+1. `account.student.studentId` (from `/auth/me` or registration) is read with
+   `studentIdFromAccount(account)` (`account.ts`); it is `undefined` unless the
+   account is `active` and the id is a finite number.
+2. `useStudentDashboard()` uses it as part of the query key and passes it to
+   `studentService.getDashboard({ signal, studentId })`. The query is disabled
+   until the id is known.
+3. In live mode `studentHttpGet` sends it as the dev-only
+   `X-Dev-Student-Id` header. In mock mode it is ignored.
+
+There is no student id in `.env.local` (`VITE_DEV_STUDENT_ID` was removed).
+Live mode is still refused in production builds because that header is not
+authentication.
+
+**When the dashboard backend validates Cognito tokens:** in `studentHttpGet`
+(`src/features/student/data/http.ts`) send
+`Authorization: Bearer ${await getAccessToken()}` and drop the dev header. The
+backend should then derive the student from the token; the frontend does not
+need to send an id at all (the account API already works this way: "identity
+comes only from the token"). The `studentId` can remain in the query key.
+
+---
+
 ## Error handling
 
 | Scenario | Behaviour |
@@ -284,8 +366,12 @@ clears tokens and revokes the refresh token → browser goes to Cognito
   found no `client_secret` / `clientSecret`.
 - **Tokens:** never copied into React state, Web Storage, or logs by app
   code. Amplify stores them via its sessionStorage adapter. `getAccessToken()`
-  / `getIdToken()` exist for future API calls. Tests assert tokens never
-  reach the DOM or the user object.
+  is called right before every account-API request (`studentAccountApi.ts`)
+  and the result lives only in a local variable; `getIdToken()` exists for
+  future use. Tests assert tokens never reach the DOM or the user object.
+  Any script running on the page can still read `sessionStorage`, so this
+  narrows the exposure but does not remove it (HttpOnly cookies via a
+  backend-for-frontend would).
 - **Claims are display-only.** Amplify decodes the ID token it received from
   Cognito over TLS but does not verify signatures. The backend must verify
   JWTs and authorize every request.
@@ -306,13 +392,15 @@ clears tokens and revokes the refresh token → browser goes to Cognito
 
 ## E. Test results
 
-Run on 2026-11-06 (Windows, Node 24.13.1).
+`typecheck` and `test` were last run on 2026-11-11 (Windows). The `build`,
+bundle-scan, `npm audit` and live-Cognito rows below were measured on
+2026-11-06 for the original Cognito change and have **not** been re-run since.
 
 | Check | Result |
 |---|---|
-| `npm run typecheck` (`tsc -b --noEmit`) | ✅ pass |
-| `npm test` (Vitest) | ✅ **29 files, 212 tests passing** (baseline 23 / 121; 4 obsolete mock tests removed) |
-| `npm run build` | ✅ pass. Bundle 674 KB / 200.5 KB gzip (before: 587 KB / 172.5 KB). Amplify auth adds about +87 KB / +28 KB gzip. Vite's ">500 KB chunk" warning **already existed** before this change |
+| `npm run typecheck` (`tsc -b --noEmit`) | ✅ pass (2026-11-11) |
+| `npm test` (Vitest) | ✅ **31 files, 274 tests passing** (2026-11-11). Original baseline was 23 files / 121 tests |
+| `npm run build` | ✅ pass (2026-11-06). Bundle 674 KB / 200.5 KB gzip (before: 587 KB / 172.5 KB). Amplify auth adds about +87 KB / +28 KB gzip. Vite's ">500 KB chunk" warning **already existed** before this change |
 | `npm run lint` | ❌ **pre-existing failure:** no `eslint.config.*` exists for ESLint 9. Not fixed here (it needs new dev dependencies and rules unrelated to this task) |
 | Production bundle scan | ✅ No mock OTP messages, dev hint, or `INVALID_OTP_FORMAT`. The three `123456` matches are Amplify's PKCE alphabet (×2) and mock job data. Only `hmb.mock.user` is the purge routine |
 | `npm audit --omit=dev` | 3 **pre-existing** findings (react-router, zod). None from `aws-amplify`. Not upgraded (breaking majors, out of scope) |
@@ -334,6 +422,16 @@ Run on 2026-11-06 (Windows, Node 24.13.1).
   redirect with return path, network failure treated as signed out, logout
   clears state/draft/intent, logout tolerates failure, `tokenRefresh_failure`,
   Hub sign-in/sign-out, phone-step gating
+- **Account API and registration:** `/auth/me` and `/students/register`
+  request/response handling, 503 backoff, restriction and conflict codes,
+  401 handling that keeps the draft, double-submit protection
+- **Student identity on the dashboard call:** the live service sends the
+  `studentId` it is given in `X-Dev-Student-Id` (and ignores any env
+  variable), refuses to call the backend without one, and
+  `useStudentDashboard` requests with the signed-in student's `studentId` and
+  does not fetch while nobody is signed in
+- **Cache isolation:** logout, session end and identity change remove the
+  `['student-dashboard', *]` entries
 - **Config:** exact Amplify v6 config shape, configure-once, sessionStorage
   token provider, missing-env handling with names-only logging, no secret in config
 
@@ -360,8 +458,10 @@ Run `npm run dev` and use **http://localhost:5173** (not `127.0.0.1`, not
    shows "Dev-only mock".
 2. **OTP:** enter `000000` → error shown. Enter `123456` → Continue with Google.
 3. **Google:** click → the browser goes to Google (not a Cognito-hosted form)
-   → choose an allowed test account → returns to `/auth/callback` → "Account
-   Created!" → Go to Dashboard.
+   → choose an allowed test account → returns to `/auth/callback` →
+   `GET /auth/me` → the signup form (new student) or the dashboard. After
+   registering, the app lands on the dashboard directly (there is no success
+   page).
 4. **Refresh** `/student/dashboard` → still signed in.
 5. **New tab** → `/student/dashboard` → sent to `/login` (expected with
    sessionStorage). Continue with Google → back on the dashboard.
@@ -449,9 +549,12 @@ origin `http://localhost:5173`), or leave it empty to go through the Vite
 Still open:
 
 - The student **dashboard** API (`src/features/student/data/http.ts`) still
-  uses the dev-only `X-Dev-Student-Id` header in live mode. Switch it to
+  uses the dev-only `X-Dev-Student-Id` header in live mode. The header value
+  is the signed-in student's `studentId` from `GET /auth/me`
+  (`account.student.studentId`), not an environment variable. Switch it to
   `Authorization: Bearer ${await getAccessToken()}` once that API validates
-  Cognito tokens. Its error envelope uses `error`, not `code`.
+  Cognito tokens (see [Dashboard identity](#dashboard-identity-and-where-state-lives)).
+  Its error envelope uses `error`, not `code`.
 - Phone ownership is not verified (mock / deferred). The backend stores the
   phone as unverified; the frontend never sends OTP values or a verified flag.
 
